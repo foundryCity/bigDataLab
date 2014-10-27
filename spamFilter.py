@@ -214,7 +214,6 @@ if __name__ == "__main__":
     #could use os.basename here
 
     logTimeIntervalWithMsg(start_time,"##### BUILDING (file,word) tuples #####")
-
     train1 = trainingSet.flatMap(lambda (file,word):([(file[file.rfind("/")+1:],remPlural(word)) \
                                                    for word in re.split('\W+',word) \
                                                    if len(word)>0]))
@@ -324,11 +323,9 @@ if 1:
 
         if 0:  #set to 1 for verbose reporting
             if use_lexicon:
-                print """\
-    ____________________________________
-    #####      EVALUATION      #####
-
-    """
+                print('____________________________________')
+                print('#####      EVALUATION      #####')
+                print "\n"
                 printConfusionDict(confusionDict(test_7.collect()))
 
             if use_hash:
