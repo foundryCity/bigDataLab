@@ -12,7 +12,7 @@ from pyspark import SparkContext
 use_lexicon = 0
 use_hash = 1
 #use_hash_signing = 1
-use_log = 0
+use_log = 1
 #hashtable_size = 6001
 
 def remPlural( word ):
@@ -39,26 +39,29 @@ def vector(tupleList,lexicon):
 def sign_hash(x):
     return 1 if len(x)%2 == 1 else -1
 
-def hashVectorSigned(tupleList):
+def hashVectorSigned(tupleList,hashtable_size):
     #input: list of tuples [(word,count),(word,count)...]
     #return: hashTable
      hash_table = [0]*hashtable_size
      for (word,count)in tupleList:
-         x = hash(word) % hashtable_size
+         x = (hash(word) % hashtable_size) if hashtable_size else 0
          hash_table[x] = hash_table[x] + sign_hash(word) * count
      return map(lambda x:abs(x),hash_table)
 
-def hashVectorUnsigned(tupleList):
+def hashVectorUnsigned(tupleList,hashtable_size):
     #input: list of tuples [(word,count),(word,count)...]
     #return: hashTable
      hash_table = [0]*hashtable_size
      for (word,count)in tupleList:
-         x = hash(word) % hashtable_size
+         x = (hash(word) % hashtable_size) if hashtable_size else 0
          hash_table[x] = hash_table[x] + count
      return map(lambda x:abs(x),hash_table)
 
-def hashVector(tupleList,use_hash_signing):
-    return hashVectorSigned(tupleList) if use_hash_signing else hashVectorUnsigned(tupleList)
+def hashVector(tupleList,hashtable_size,use_hash_signing):
+    if use_hash_signing:
+        return hashVectorSigned(tupleList,hashtable_size)
+    else:
+        return hashVectorUnsigned(tupleList,hashtable_size)
 
 def wordCountPerFile(rdd):
     #input: rdd of (file,word) tuples
@@ -180,13 +183,10 @@ def logTimeIntervalWithMsg(start_time, msg):
     if (use_log):
         message = msg if msg else ""
         timedelta = (datetime.now() - start_time)
-        print ("log:", timedelta.seconds,message)
+        print "log:{} {}".format(timedelta.seconds,message)
 
 def logPrint(string):
-    if use_log:
-        print (string)
-    else:
-        print '.',
+    print string if use_log else '.',
 
 
 if __name__ == "__main__":
@@ -213,7 +213,7 @@ if __name__ == "__main__":
     #2 (A)  Use the code from last time to generate the [(word,count), ...] list per file.
     #could use os.basename here
 
-    logPrint("\n##### BUILDING (file,word) tuples #####\n")
+    logTimeIntervalWithMsg(start_time,"##### BUILDING (file,word) tuples #####")
 
     train1 = trainingSet.flatMap(lambda (file,word):([(file[file.rfind("/")+1:],remPlural(word)) \
                                                    for word in re.split('\W+',word) \
@@ -230,13 +230,12 @@ if __name__ == "__main__":
     test_1.cache()
     logTimeInterval(start_time)
 
-    ##### BUILDING THE LEXICON #####
     if use_lexicon:
-        logPrint("\n\n  ##### BUILDING THE LEXICON #####\n")
+        logTimeIntervalWithMsg(start_time,"##### BUILDING THE LEXICON #####")
         training_words = train1.map (lambda(f,x):x)
-        logPrint("training_words: %i" %  training_words.count())
+        logTimeIntervalWithMsg(start_time,"training_words: %i" %  training_words.count())
         training_lexicon = training_words.distinct()
-        logPrint("training_lexicon: %i" % training_lexicon.count())
+        logTimeIntervalWithMsg(start_time,"training_lexicon: %i" % training_lexicon.count())
         lexicon = training_lexicon.collect()
 
 
@@ -246,25 +245,25 @@ if __name__ == "__main__":
     test_5 = wordCountPerFile(test_1)
 
 
-    ##### CREATE A DOC VECTOR AGAINST THE LEXICON   #####
 
-
-for hashtable_size in range (1000,21000,1000):
-    for use_hash_signing in range (0,1,1):
+print "\n"
+#for hashtable_size in range (8000,1,1):
+if 1:
+        hashtable_size = 8000
+        use_hash_signing = 1
 
 
         #train6 = train5.map (lambda (f,x): ( f,vector(x,lexicon)))
-        logTimeInterval(start_time)
 
         if use_hash:
-            #logPrint('##### CREATE A DOC VECTOR OF HASHES  #####')
-            hashtrain6 = train5.map(lambda(f,x):(f,hashVector(x,use_hash_signing)))
+            logTimeIntervalWithMsg(start_time,'##### CREATE A DOC VECTOR OF HASHES  #####')
+            hashtrain6 = train5.map(lambda(f,x):(f,hashVector(x,hashtable_size,use_hash_signing)))
             #print ("hashtrain6 sample:", hashtrain6.takeSample(True,4,0))
-            hashtest6  = test_5.map (lambda(f,x):(f,hashVector(x,use_hash_signing)))
+            hashtest6  = test_5.map (lambda(f,x):(f,hashVector(x,hashtable_size,use_hash_signing)))
 
 
         if use_lexicon:
-            #logPrint('##### CREATE A DOC VECTOR AGAINST THE LEXICON   #####')
+            logTimeIntervalWithMsg(start_time,'##### CREATE A DOC VECTOR AGAINST THE LEXICON   #####')
             train6=vectorise(train5,lexicon)
             #print ("traint6 sample:", train6.takeSample(True,4,0))
             test_6=vectorise(test_5,lexicon)
@@ -275,7 +274,7 @@ for hashtable_size in range (1000,21000,1000):
         # and here http://spark.apache.org/docs/latest/api/python/pyspark.mllib.regression.LabeledPoint-class.html
         # for the LabelledPoint documentation.
 
-        #logPrint('#####      TEST WHETHER FILE IS SPAM       #####')
+        logTimeIntervalWithMsg(start_time,'#####      TEST WHETHER FILE IS SPAM       #####')
         ##### REPLACE FILENAME BY 1 (spam) 0 (ham) #####
 
         if use_lexicon:
@@ -285,36 +284,33 @@ for hashtable_size in range (1000,21000,1000):
             hashtrain7 = hashtrain6.map (lambda(f,x):(1 if 'spmsg' in f else 0, x))
             #print ("hashtrain7 sample",hashtrain7.take(2))
 
-        logTimeInterval(start_time)
 
 
-        #logPrint('#####      MAP TO LABELLED POINTS      #####')
+        logTimeIntervalWithMsg(start_time,'#####      MAP TO LABELLED POINTS      #####')
         if use_lexicon:
             train8 = train7.map (lambda (f,x):LabeledPoint(f,x))
         if use_hash:
             hashtrain8 = hashtrain7.map (lambda (f,x):LabeledPoint(f,x))
 
-        logTimeInterval(start_time)
 
         #4 Use the created RDD of LabelledPoint objects to train the NaiveBayes and save
         # the model as a variable nbModel (again, use this example
         # http://spark.apache.org/ docs/latest/mllib-naive-bayes.html and here is the documentation
         # http://spark. apache.org/docs/latest/api/python/pyspark.mllib.regression.LabeledPoint-class. html).
 
-        #logPrint('#####      TRAIN THE NAIVE BAYES      #####')
+        logTimeIntervalWithMsg(start_time,'#####      TRAIN THE NAIVE BAYES      #####')
         if use_lexicon:
             nbModel = NaiveBayes.train(train8, 1.0)
         if use_hash:
             hashnbModel =  NaiveBayes.train(hashtrain8, 1.0)
 
-        logTimeInterval(start_time)
 
         # 5 Use the files from /data/extra/spam/bare/part2 and prepare them like in task 3).
         # Then use nbModel to predict the label for each vector you have and compare it to the original,
         # to test the performance of your classifier.
 
         #          """
-        #logPrint('#####      RUN THE PREDICTION      #####')
+        logTimeIntervalWithMsg(start_time,'#####      RUN THE PREDICTION      #####')
         if use_lexicon:
             test_7 = test_6.map(lambda (f,x):(1 if 'spmsg' in f else 0,int(nbModel.predict(x).item())))
             if use_log: print ("prediction sample: ",test_7.takeSample(False,20,0))
@@ -324,9 +320,9 @@ for hashtable_size in range (1000,21000,1000):
             if use_log: print ("prediction sample: ",hashtest7.takeSample(False,20,0))
 
 
-        logTimeInterval(start_time)
+        logTimeIntervalWithMsg(start_time,'#####      EVALUATE THE RESULTS      #####')
 
-        if 0:
+        if 0:  #set to 1 for verbose reporting
             if use_lexicon:
                 print """\
     ____________________________________
@@ -342,8 +338,8 @@ for hashtable_size in range (1000,21000,1000):
                 print "\n"
                 printConfusionDict(confusionDict(hashtest7.collect()))
 
-        else:
-           
+        else: #1-line reporting (for spreadsheets)
+
             if use_lexicon:
                 cd = confusionDict(test_7.collect())
                 print("L\t\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f" \
@@ -360,3 +356,6 @@ for hashtable_size in range (1000,21000,1000):
 
 
 
+
+
+        logTimeIntervalWithMsg(start_time,'#####      FINISHED      #####')
