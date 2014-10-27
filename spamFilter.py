@@ -5,8 +5,8 @@ import numpy
 from operator import add
 from pyspark.mllib.regression import LabeledPoint
 from pyspark.mllib.classification import NaiveBayes
-from datetime import datetime, time, timedelta
-
+from datetime import datetime  #, time, timedelta
+from time import time
 from pyspark import SparkContext
 
 use_lexicon = 0
@@ -174,16 +174,19 @@ def printConfusionDict(confusionDict):
         ))
 
 
-def logTimeInterval(start_time):
+def logTimeInterval(s_time):
     if (use_log):
-        timedelta = (datetime.now() - start_time)
-        print ("log:",timedelta.seconds)
+        #timedelta = (datetime.now() - s_time)
+        timedelta = time() - s_time
 
-def logTimeIntervalWithMsg(start_time, msg):
+        print ("log:{:3f}".format(timedelta))
+
+def logTimeIntervalWithMsg(s_time, msg):
     if (use_log):
         message = msg if msg else ""
-        timedelta = (datetime.now() - start_time)
-        print "log:{} {}".format(timedelta.seconds,message)
+        #timedelta = (datetime.now() - s_time)
+        timedelta = time() - s_time
+        print "log:{:.3f} {}".format(timedelta,message)
 
 def logPrint(string):
     print string if use_log else '.',
@@ -191,50 +194,51 @@ def logPrint(string):
 
 if __name__ == "__main__":
     start_time = datetime.now()
+    s_time = time()
 
     if len(sys.argv) != 4:
         print >> sys.stderr, "Usage: spanfolder <folder> testfolder <folder> stoplist<file>"
         exit(-1)
     sc = SparkContext(appName="spamFilter")
-    logTimeIntervalWithMsg(start_time,"spark initialised, resetting timer")
+    logTimeIntervalWithMsg(s_time,"spark initialised, resetting timer")
     start_time = datetime.now()
+    s_time = time()
 
 
     #1 Start by loading the files from part1 with wholeTextFiles.
     trainingSet = sc.wholeTextFiles(sys.argv[1], 1)
-    logTimeInterval(start_time)
+    logTimeInterval(s_time)
     testSet     = sc.wholeTextFiles(sys.argv[2],1)
-    logTimeInterval(start_time)
+    logTimeInterval(s_time)
     stopfile    = sc.textFile(sys.argv[3],1)
     stoplist    = stopfile.flatMap (lambda x: re.split('\W+',x)).collect()
-    logTimeInterval(start_time)
+    logTimeInterval(s_time)
 
 
     #2 (A)  Use the code from last time to generate the [(word,count), ...] list per file.
     #could use os.basename here
 
-    logTimeIntervalWithMsg(start_time,"##### BUILDING (file,word) tuples #####")
+    logTimeIntervalWithMsg(s_time,"##### BUILDING (file,word) tuples #####")
     train1 = trainingSet.flatMap(lambda (file,word):([(file[file.rfind("/")+1:],remPlural(word)) \
                                                    for word in re.split('\W+',word) \
                                                    if len(word)>0]))
-    logPrint("training set: " % train1.takeSample(True,4,0))
+    logTimeIntervalWithMsg(s_time,"training set: {}".format(train1.takeSample(True,4,0)))
 
     test_1 =     testSet.flatMap(lambda (file,word):([(file[file.rfind("/")+1:],remPlural(word)) \
                                                    for word in re.split('\W+',word) \
                                                    if len(word)>0]))
 
-    logPrint("test set    : {}".format(test_1.takeSample(True,4,0)))
+    logTimeIntervalWithMsg(s_time,"test set    : {}".format(test_1.takeSample(True,4,0)))
 
     train1.cache()
     test_1.cache()
-    logTimeInterval(start_time)
 
     if use_lexicon:
-        logTimeIntervalWithMsg(start_time,"##### BUILDING THE LEXICON #####")
+        logTimeIntervalWithMsg(s_time,"##### BUILDING THE LEXICON #####")
         training_words = train1.map (lambda(f,x):x)
-        logTimeIntervalWithMsg(start_time,"training_words: %i" %  training_words.count())
+        logTimeIntervalWithMsg(s_time,"training_words: %i" %  training_words.count())
         training_lexicon = training_words.distinct()
-        logTimeIntervalWithMsg(start_time,"training_lexicon: %i" % training_lexicon.count())
+        logTimeIntervalWithMsg(s_time,"training_lexicon: %i" % training_lexicon.count())
         lexicon = training_lexicon.collect()
 
 
@@ -246,23 +250,25 @@ if __name__ == "__main__":
 
 
 print "\n"
-#for hashtable_size in range (8000,1,1):
-if 1:
-        hashtable_size = 8000
-        use_hash_signing = 1
+use_hash_signing = 1
+use_log = 0
+print("hSize\tsigned?\tTP\tFP\tFN\tTN\tRecall\tPrcsion\tF-mesr\tAccuracy")
+for hashtable_size in range (1,100,1):
+#if 1:
+        #hashtable_size = 8000
 
 
         #train6 = train5.map (lambda (f,x): ( f,vector(x,lexicon)))
 
         if use_hash:
-            logTimeIntervalWithMsg(start_time,'##### CREATE A DOC VECTOR OF HASHES  #####')
+            logTimeIntervalWithMsg(s_time,'##### CREATE A DOC VECTOR OF HASHES  #####')
             hashtrain6 = train5.map(lambda(f,x):(f,hashVector(x,hashtable_size,use_hash_signing)))
             #print ("hashtrain6 sample:", hashtrain6.takeSample(True,4,0))
             hashtest6  = test_5.map (lambda(f,x):(f,hashVector(x,hashtable_size,use_hash_signing)))
 
 
         if use_lexicon:
-            logTimeIntervalWithMsg(start_time,'##### CREATE A DOC VECTOR AGAINST THE LEXICON   #####')
+            logTimeIntervalWithMsg(s_time,'##### CREATE A DOC VECTOR AGAINST THE LEXICON   #####')
             train6=vectorise(train5,lexicon)
             #print ("traint6 sample:", train6.takeSample(True,4,0))
             test_6=vectorise(test_5,lexicon)
@@ -273,7 +279,7 @@ if 1:
         # and here http://spark.apache.org/docs/latest/api/python/pyspark.mllib.regression.LabeledPoint-class.html
         # for the LabelledPoint documentation.
 
-        logTimeIntervalWithMsg(start_time,'#####      TEST WHETHER FILE IS SPAM       #####')
+        logTimeIntervalWithMsg(s_time,'#####      TEST WHETHER FILE IS SPAM       #####')
         ##### REPLACE FILENAME BY 1 (spam) 0 (ham) #####
 
         if use_lexicon:
@@ -285,7 +291,7 @@ if 1:
 
 
 
-        logTimeIntervalWithMsg(start_time,'#####      MAP TO LABELLED POINTS      #####')
+        logTimeIntervalWithMsg(s_time,'#####      MAP TO LABELLED POINTS      #####')
         if use_lexicon:
             train8 = train7.map (lambda (f,x):LabeledPoint(f,x))
         if use_hash:
@@ -297,7 +303,7 @@ if 1:
         # http://spark.apache.org/ docs/latest/mllib-naive-bayes.html and here is the documentation
         # http://spark. apache.org/docs/latest/api/python/pyspark.mllib.regression.LabeledPoint-class. html).
 
-        logTimeIntervalWithMsg(start_time,'#####      TRAIN THE NAIVE BAYES      #####')
+        logTimeIntervalWithMsg(s_time,'#####      TRAIN THE NAIVE BAYES      #####')
         if use_lexicon:
             nbModel = NaiveBayes.train(train8, 1.0)
         if use_hash:
@@ -309,7 +315,7 @@ if 1:
         # to test the performance of your classifier.
 
         #          """
-        logTimeIntervalWithMsg(start_time,'#####      RUN THE PREDICTION      #####')
+        logTimeIntervalWithMsg(s_time,'#####      RUN THE PREDICTION      #####')
         if use_lexicon:
             test_7 = test_6.map(lambda (f,x):(1 if 'spmsg' in f else 0,int(nbModel.predict(x).item())))
             if use_log: print ("prediction sample: ",test_7.takeSample(False,20,0))
@@ -319,7 +325,7 @@ if 1:
             if use_log: print ("prediction sample: ",hashtest7.takeSample(False,20,0))
 
 
-        logTimeIntervalWithMsg(start_time,'#####      EVALUATE THE RESULTS      #####')
+        logTimeIntervalWithMsg(s_time,'#####      EVALUATE THE RESULTS      #####')
 
         if 0:  #set to 1 for verbose reporting
             if use_lexicon:
@@ -339,20 +345,20 @@ if 1:
 
             if use_lexicon:
                 cd = confusionDict(test_7.collect())
-                print("L\t\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f" \
+                print("L\t\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f\t%.3f" \
                       %(\
                         cd['TP'],cd['FP'],cd['FN'],cd['TN'],\
-                        cd['Recall'],cd['Precision'],cd['Fmeasure']))
+                        cd['Recall'],cd['Precision'],cd['Fmeasure'],cd['Accuracy']))
             if use_hash:
                 cd = confusionDict(hashtest7.collect())
-                print("%i\t%i\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f" \
+                print("%i\t%i\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f\t%.3f" \
                       %(hashtable_size,use_hash_signing,\
                         cd['TP'],cd['FP'],cd['FN'],cd['TN'],\
-                        cd['Recall'],cd['Precision'],cd['Fmeasure']))
+                        cd['Recall'],cd['Precision'],cd['Fmeasure'],cd['Accuracy']))
 
 
 
 
 
 
-        logTimeIntervalWithMsg(start_time,'#####      FINISHED      #####')
+        logTimeIntervalWithMsg(s_time,'#####      FINISHED      #####')
