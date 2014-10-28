@@ -11,11 +11,24 @@ from pyspark import SparkContext
 
 use_lexicon = 0
 use_hash = 1
-#use_hash_signing = 1
 use_log = 1
-#hashtable_size = 6001
+global s_time
 s_time = time()
 
+#hashtable_size = 6001
+
+
+def validateInput():
+    if len(sys.argv) != 3:
+        print >> sys.stderr, "Usage: spamPath <folder> stoplist<file>"
+        exit(-1)
+
+def initialiseSpark():
+    global s_time
+    sc = SparkContext(appName="spamFilter")
+    logTimeIntervalWithMsg("spark initialised, resetting timer")
+    s_time = time()
+    return sc
 
 def remPlural( word ):
     word = word.lower()
@@ -68,23 +81,29 @@ def hashVector(tupleList,hashtable_size,use_hash_signing):
 def wordCountPerFile(rdd):
     #input: rdd of (file,word) tuples
     #return: rdd of (file, [(word, count),(word, count)...]) tuples
-    logTimeIntervalWithMsg(s_time,"##### BUILDING wordCountPerFile #####")
-    rdd = rdd.map(lambda (x):((x[0],x[1]),  1))
+    logTimeIntervalWithMsg("##### BUILDING wordCountPerFile #####")
+    result = rdd.map(lambda (x):((x[0],x[1]),  1))
     #print('##### GETTING THE  ((file,word),n) WORDCOUNT PER (DOC, WORD) #####')
-    rdd = rdd.reduceByKey(add)
+    result = result.reduceByKey(add)
     #print('##### REARRANGE AS  (file, [(word, count)])  #####')
-    rdd = rdd.map (lambda (a,b) : (a[0],[(a[1],b)]))
+    result = result.map (lambda (a,b) : (a[0],[(a[1],b)]))
     #print ('##### CONCATENATE (WORD,COUNT) LIST PER FILE AS  (file, [(word, count),(word, count)...])  #####')
-    rdd = rdd.reduceByKey(add)
-    return rdd
+    result = result.reduceByKey(add)
+    return result
 
 
-def vectorise(rdd,lexicon):
+def vectoriseWithHashtable(rdd,hashtable_size):
     #input: rdd of (file, [(word, count),(word, count)...]) tuples
     #return: rdd of (file,[vector]) tuples
-    #print('##### CREATE A DOC VECTOR AGAINST THE LEXICON   #####')
-    rdd = rdd.map (lambda (f,wc): ( f,vector(wc,lexicon)))
-    return rdd
+    logTimeIntervalWithMsg('##### CREATE A DOC VECTOR OF HASHES  #####')
+    result =  rdd.map(lambda(f,x):(f,hashVector(x,hashtable_size,use_hash_signing)))
+    return result
+
+def vectoriseWithLexicon(rdd,lexicon):
+    global s_time
+    logTimeIntervalWithMsg('##### CREATE A DOC VECTOR AGAINST THE LEXICON   #####')
+    result = rdd.map (lambda (f,wc): ( f,vector(wc,lexicon)))
+    return result
 
 
 def confusionMatrix (tupleList):
@@ -176,24 +195,25 @@ def printConfusionDict(confusionDict):
         ))
 
 
-def logTimeInterval(s_time):
+def logTimeInterval():
     if (use_log):
+        global s_time
         #timedelta = (datetime.now() - s_time)
         timedelta = time() - s_time
-
         print ("log:{:3f}".format(timedelta))
 
-def logTimeIntervalWithMsg(s_time, msg):
+def logTimeIntervalWithMsg(msg):
     if (use_log):
+        global s_time
         message = msg if msg else ""
         #timedelta = (datetime.now() - s_time)
-        timedelta = time() - s_time
+        timedelta = time() -  s_time
         print "log:{:.3f} {}".format(timedelta,message)
 
 def logPrint(string):
     print string if use_log else '.',
 
-def extractRDDs(path,validation_index,file_range):
+def buildRDDs(path,validation_index,file_range):
     firstLoop =1
     for k in file_range:
         tmpPath = spamPath+'part'+str(k)
@@ -211,13 +231,14 @@ def extractRDDs(path,validation_index,file_range):
 
 
 def lexiconArray(rdd):
+    global s_time
     #input: rdd of (file,word) tuples
     #output: [word1,word2,word3] array of distinct words
     logTimeIntervalWithMsg(s_time,"##### BUILDING THE LEXICON #####")
     training_words = rdd.map (lambda(f,x):x)
-    logTimeIntervalWithMsg(s_time,"training_words: %i" %  training_words.count())
+    logTimeIntervalWithMsg("training_words: %i" %  training_words.count())
     training_lexicon = training_words.distinct()
-    logTimeIntervalWithMsg(s_time,"training_lexicon: %i" % training_lexicon.count())
+    logTimeIntervalWithMsg("training_lexicon: %i" % training_lexicon.count())
     return training_lexicon.collect()
 
 
@@ -225,8 +246,9 @@ def lexiconArray(rdd):
 def processRDD(rdd,create_lexicon):
     #input: rdd as read from filesystem
     #output: array of [processed RDD,lexicon] or [processed RDD] if create_lexicon is None
+    global s_time
 
-    logTimeIntervalWithMsg(s_time,"##### BUILDING (file,word) tuples #####")
+    logTimeIntervalWithMsg("##### BUILDING (file,word) tuples #####")
 
     processedRDD = rdd.flatMap(lambda (file,word):([(file[file.rfind("/")+1:],remPlural(word)) \
                                                    for word in re.split('\W+',word) \
@@ -235,147 +257,116 @@ def processRDD(rdd,create_lexicon):
     processedRDD = wordCountPerFile(processedRDD)
     return [processedRDD,lexicon]
 
+def trainBayes(rdd):
+    global s_time
+    logTimeIntervalWithMsg('#####      TEST WHETHER FILE IS SPAM       #####')
+    processedRDD = rdd.map (lambda(f,x):(1 if 'spmsg' in f else 0, x))
+    logTimeIntervalWithMsg('#####      MAP TO LABELLED POINTS      #####')
+    processedRDD = processedRDD.map (lambda (f,x):LabeledPoint(f,x))
+    logTimeIntervalWithMsg('#####      TRAIN THE NAIVE BAYES      #####')
+    nbModel = NaiveBayes.train(processedRDD, 1.0)
+    return nbModel
+
+def predict(rdd,nbModel):
+    global s_time
+    logTimeIntervalWithMsg('#####      RUN THE PREDICTION      #####')
+    result = rdd.map(lambda (f,x):(1 if 'spmsg' in f else 0,int(nbModel.predict(x).item())))
+    if use_log: print ("prediction sample: ",result.takeSample(False,20,0))
+    return result
+
+
+def reportResults(lexPrediction, hashPrediction):
+    global s_time
+    logTimeIntervalWithMsg('#####      EVALUATE THE RESULTS      #####')
+
+    if 0:  #set to 1 for verbose reporting
+        if use_lexicon:
+            print('____________________________________')
+            print('#####      EVALUATION      #####')
+            print "\n"
+            printConfusionDict(confusionDict(lexPrediction.collect()))
+
+        if use_hash:
+            print('____________________________________')
+            print('#####    HASH  EVALUATION      #####')
+            print("#####    size %i" % (hashtable_size))
+            print "\n"
+            printConfusionDict(confusionDict(hashPrediction.collect()))
+
+    else: #1-line reporting (for spreadsheets)
+
+        if use_lexicon:
+            cd = confusionDict(lexPrediction.collect())
+            print("L\t\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f\t%.3f" \
+                  %(\
+                    cd['TP'],cd['FP'],cd['FN'],cd['TN'],\
+                    cd['Recall'],cd['Precision'],cd['Fmeasure'],cd['Accuracy']))
+        if use_hash:
+            cd = confusionDict(hashPrediction.collect())
+            print("%i\t%i\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f\t%.3f" \
+                  %(hashtable_size,use_hash_signing,\
+                    cd['TP'],cd['FP'],cd['FN'],cd['TN'],\
+                    cd['Recall'],cd['Precision'],cd['Fmeasure'],cd['Accuracy']))
+
+
+def trainAndTest(trainingSet, testSet,use_lexicon, use_hash):
+    global s_time
+
+    if use_lexicon:
+
+        logTimeIntervalWithMsg('##### T R A I N I N G  #####')
+        trainingSet=vectoriseWithLexicon(trainingSet,lexicon)
+        nbModel = trainBayes(trainingSet)
+
+        logTimeIntervalWithMsg('##### T E S T I N G  #####')
+        testSet = vectoriseWithLexicon(testSet,lexicon)
+        lexPrediction = predict(testSet,nbModel)
+    else:
+        lexPrediction = None
+
+    if use_hash:
+
+        logTimeIntervalWithMsg('##### T R A I N I N G  #####')
+        trainingSet = vectoriseWithHashtable(trainingSet,hashtable_size)
+        nbModel = trainBayes(trainingSet)
+
+        logTimeIntervalWithMsg('##### T E S T I N G  #####')
+        testSet  = vectoriseWithHashtable(testSet,hashtable_size)
+        hashPrediction = predict(testSet,nbModel)
+    else:
+        hashPrediction = None
+
+    return [lexPrediction,hashPrediction]
+
+
+
 
 
 if __name__ == "__main__":
 
-    if len(sys.argv) != 4:
-        print >> sys.stderr, "Usage: spamPath <folder> testfolder <folder> stoplist<file>"
-        exit(-1)
-    sc = SparkContext(appName="spamFilter")
-    logTimeIntervalWithMsg(s_time,"spark initialised, resetting timer")
-    s_time = time()
-
-
-    #1 Start by loading the files from part1 with wholeTextFiles.
-    spamPath = (sys.argv[1])
-    print "\nspamPath: {}\n".format(spamPath)
+    validateInput()
+    sc = initialiseSpark()
+    spamPath = sys.argv[1]
     validation_index = 1
-    rdds = extractRDDs(spamPath,validation_index,range(1,4))
-    trainingSet = rdds[0]
-    testSet = rdds[1]
-    #(trainingSet,testSet) = rdds
+    rddArray = buildRDDs(spamPath,validation_index,range(1,4))
+    trainingSet = rddArray[0]
+    testSet = rddArray[1]
 
    # trainingSet = sc.wholeTextFiles(sys.argv[1], 1)
-    stopfile    = sc.textFile(sys.argv[3],1)
+    stopfile    = sc.textFile(sys.argv[2],1)
     stoplist    = stopfile.flatMap (lambda x: re.split('\W+',x)).collect()
-
 
     trainingArray = processRDD(trainingSet,use_lexicon)
     trainingSet =trainingArray[0]
-    if use_lexicon: lexicon = trainingArray[1]
+    lexicon = trainingArray[1]
     testSet = processRDD(testSet,None)[0]
 
-print "\n"
-use_hash_signing = 1
-use_log = 0
-print("hSize\tsigned?\tTP\tFP\tFN\tTN\tRecall\tPrcsion\tF-mesr\tAccuracy")
-for hashtable_size in range (1,100,1):
-#if 1:
-        #hashtable_size = 8000
+    print "\n"
+    use_hash_signing = 1
+    use_log = 0
+    print("hSize\tsigned?\tTP\tFP\tFN\tTN\tRecall\tPrcsion\tF-mesr\tAccuracy")
+    for hashtable_size in range (1,100,1):
+        (lexPrediction,hashPrediction) = trainAndTest(trainingSet,testSet,use_lexicon,use_hash)
+        reportResults(lexPrediction,hashPrediction)
 
 
-        #train6 = train5.map (lambda (f,x): ( f,vector(x,lexicon)))
-
-        if use_hash:
-            logTimeIntervalWithMsg(s_time,'##### CREATE A DOC VECTOR OF HASHES  #####')
-            hashtrain6 = trainingSet.map(lambda(f,x):(f,hashVector(x,hashtable_size,use_hash_signing)))
-            #print ("hashtrain6 sample:", hashtrain6.takeSample(True,4,0))
-            hashtest6  = testSet.map (lambda(f,x):(f,hashVector(x,hashtable_size,use_hash_signing)))
-
-
-        if use_lexicon:
-            logTimeIntervalWithMsg(s_time,'##### CREATE A DOC VECTOR AGAINST THE LEXICON   #####')
-            train6=vectorise(train5,lexicon)
-            #print ("traint6 sample:", train6.takeSample(True,4,0))
-            test_6=vectorise(test_5,lexicon)
-
-        # 3 Test whether the file is spam (i.e. the path contains spmsg) and replace the filename
-        # by a 1 (spam) or 0 (ham) accordingly. Use map() to create an RDD of LabeledPoint objects.
-        # See here http://spark.apache.org/docs/latest/mllib-naive-bayes.html for an example,
-        # and here http://spark.apache.org/docs/latest/api/python/pyspark.mllib.regression.LabeledPoint-class.html
-        # for the LabelledPoint documentation.
-
-        logTimeIntervalWithMsg(s_time,'#####      TEST WHETHER FILE IS SPAM       #####')
-        ##### REPLACE FILENAME BY 1 (spam) 0 (ham) #####
-
-        if use_lexicon:
-            train7 = train6.map (lambda(f,x):(1 if 'spmsg' in f else 0, x))
-            #print ("train7 sample",train7.take(2))
-        if use_hash:
-            hashtrain7 = hashtrain6.map (lambda(f,x):(1 if 'spmsg' in f else 0, x))
-            #print ("hashtrain7 sample",hashtrain7.take(2))
-
-
-
-        logTimeIntervalWithMsg(s_time,'#####      MAP TO LABELLED POINTS      #####')
-        if use_lexicon:
-            train8 = train7.map (lambda (f,x):LabeledPoint(f,x))
-        if use_hash:
-            hashtrain8 = hashtrain7.map (lambda (f,x):LabeledPoint(f,x))
-
-
-        #4 Use the created RDD of LabelledPoint objects to train the NaiveBayes and save
-        # the model as a variable nbModel (again, use this example
-        # http://spark.apache.org/ docs/latest/mllib-naive-bayes.html and here is the documentation
-        # http://spark. apache.org/docs/latest/api/python/pyspark.mllib.regression.LabeledPoint-class. html).
-
-        logTimeIntervalWithMsg(s_time,'#####      TRAIN THE NAIVE BAYES      #####')
-        if use_lexicon:
-            nbModel = NaiveBayes.train(train8, 1.0)
-        if use_hash:
-            hashnbModel =  NaiveBayes.train(hashtrain8, 1.0)
-
-
-        # 5 Use the files from /data/extra/spam/bare/part2 and prepare them like in task 3).
-        # Then use nbModel to predict the label for each vector you have and compare it to the original,
-        # to test the performance of your classifier.
-
-        #          """
-        logTimeIntervalWithMsg(s_time,'#####      RUN THE PREDICTION      #####')
-        if use_lexicon:
-            test_7 = test_6.map(lambda (f,x):(1 if 'spmsg' in f else 0,int(nbModel.predict(x).item())))
-            if use_log: print ("prediction sample: ",test_7.takeSample(False,20,0))
-
-        if use_hash:
-            hashtest7 = hashtest6.map(lambda (f,x):(1 if 'spmsg' in f else 0,int(hashnbModel.predict(x).item())))
-            if use_log: print ("prediction sample: ",hashtest7.takeSample(False,20,0))
-
-
-        logTimeIntervalWithMsg(s_time,'#####      EVALUATE THE RESULTS      #####')
-
-        if 0:  #set to 1 for verbose reporting
-            if use_lexicon:
-                print('____________________________________')
-                print('#####      EVALUATION      #####')
-                print "\n"
-                printConfusionDict(confusionDict(test_7.collect()))
-
-            if use_hash:
-                print('____________________________________')
-                print('#####    HASH  EVALUATION      #####')
-                print("#####    size %i" % (hashtable_size))
-                print "\n"
-                printConfusionDict(confusionDict(hashtest7.collect()))
-
-        else: #1-line reporting (for spreadsheets)
-
-            if use_lexicon:
-                cd = confusionDict(test_7.collect())
-                print("L\t\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f\t%.3f" \
-                      %(\
-                        cd['TP'],cd['FP'],cd['FN'],cd['TN'],\
-                        cd['Recall'],cd['Precision'],cd['Fmeasure'],cd['Accuracy']))
-            if use_hash:
-                cd = confusionDict(hashtest7.collect())
-                print("%i\t%i\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f\t%.3f" \
-                      %(hashtable_size,use_hash_signing,\
-                        cd['TP'],cd['FP'],cd['FN'],cd['TN'],\
-                        cd['Recall'],cd['Precision'],cd['Fmeasure'],cd['Accuracy']))
-
-
-
-
-
-
-        logTimeIntervalWithMsg(s_time,'#####      FINISHED      #####')
