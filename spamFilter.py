@@ -14,6 +14,8 @@ use_hash = 1
 #use_hash_signing = 1
 use_log = 1
 #hashtable_size = 6001
+s_time = time()
+
 
 def remPlural( word ):
     word = word.lower()
@@ -66,7 +68,7 @@ def hashVector(tupleList,hashtable_size,use_hash_signing):
 def wordCountPerFile(rdd):
     #input: rdd of (file,word) tuples
     #return: rdd of (file, [(word, count),(word, count)...]) tuples
-    #print ("##### BUILDING  ((file,word),1) tuples #####")
+    logTimeIntervalWithMsg(s_time,"##### BUILDING wordCountPerFile #####")
     rdd = rdd.map(lambda (x):((x[0],x[1]),  1))
     #print('##### GETTING THE  ((file,word),n) WORDCOUNT PER (DOC, WORD) #####')
     rdd = rdd.reduceByKey(add)
@@ -191,63 +193,78 @@ def logTimeIntervalWithMsg(s_time, msg):
 def logPrint(string):
     print string if use_log else '.',
 
+def extractRDDs(path,validation_index,file_range):
+    firstLoop =1
+    for k in file_range:
+        tmpPath = spamPath+'part'+str(k)
+        if k==validation_index:
+            testSet = sc.wholeTextFiles(tmpPath)
+        else:
+            tmpRDD = sc.wholeTextFiles(tmpPath)
+            if (firstLoop):
+                trainingSet = tmpRDD
+                firstLoop = 0
+            else:
+                trainingSet = trainingSet.union(tmpRDD)
+
+    return (trainingSet,testSet)
+
+
+def lexiconArray(rdd):
+    #input: rdd of (file,word) tuples
+    #output: [word1,word2,word3] array of distinct words
+    logTimeIntervalWithMsg(s_time,"##### BUILDING THE LEXICON #####")
+    training_words = rdd.map (lambda(f,x):x)
+    logTimeIntervalWithMsg(s_time,"training_words: %i" %  training_words.count())
+    training_lexicon = training_words.distinct()
+    logTimeIntervalWithMsg(s_time,"training_lexicon: %i" % training_lexicon.count())
+    return training_lexicon.collect()
+
+
+
+def processRDD(rdd,create_lexicon):
+    #input: rdd as read from filesystem
+    #output: array of [processed RDD,lexicon] or [processed RDD] if create_lexicon is None
+
+    logTimeIntervalWithMsg(s_time,"##### BUILDING (file,word) tuples #####")
+
+    processedRDD = rdd.flatMap(lambda (file,word):([(file[file.rfind("/")+1:],remPlural(word)) \
+                                                   for word in re.split('\W+',word) \
+                                                   if len(word)>0]))
+    lexicon = lexiconArray(processedRDD) if create_lexicon else None
+    processedRDD = wordCountPerFile(processedRDD)
+    return [processedRDD,lexicon]
+
+
 
 if __name__ == "__main__":
-    start_time = datetime.now()
-    s_time = time()
 
     if len(sys.argv) != 4:
-        print >> sys.stderr, "Usage: spanfolder <folder> testfolder <folder> stoplist<file>"
+        print >> sys.stderr, "Usage: spamPath <folder> testfolder <folder> stoplist<file>"
         exit(-1)
     sc = SparkContext(appName="spamFilter")
     logTimeIntervalWithMsg(s_time,"spark initialised, resetting timer")
-    start_time = datetime.now()
     s_time = time()
 
 
     #1 Start by loading the files from part1 with wholeTextFiles.
-    trainingSet = sc.wholeTextFiles(sys.argv[1], 1)
-    logTimeInterval(s_time)
-    testSet     = sc.wholeTextFiles(sys.argv[2],1)
-    logTimeInterval(s_time)
+    spamPath = (sys.argv[1])
+    print "\nspamPath: {}\n".format(spamPath)
+    validation_index = 1
+    rdds = extractRDDs(spamPath,validation_index,range(1,4))
+    trainingSet = rdds[0]
+    testSet = rdds[1]
+    #(trainingSet,testSet) = rdds
+
+   # trainingSet = sc.wholeTextFiles(sys.argv[1], 1)
     stopfile    = sc.textFile(sys.argv[3],1)
     stoplist    = stopfile.flatMap (lambda x: re.split('\W+',x)).collect()
-    logTimeInterval(s_time)
 
 
-    #2 (A)  Use the code from last time to generate the [(word,count), ...] list per file.
-    #could use os.basename here
-
-    logTimeIntervalWithMsg(s_time,"##### BUILDING (file,word) tuples #####")
-    train1 = trainingSet.flatMap(lambda (file,word):([(file[file.rfind("/")+1:],remPlural(word)) \
-                                                   for word in re.split('\W+',word) \
-                                                   if len(word)>0]))
-    logTimeIntervalWithMsg(s_time,"training set: {}".format(train1.takeSample(True,4,0)))
-
-    test_1 =     testSet.flatMap(lambda (file,word):([(file[file.rfind("/")+1:],remPlural(word)) \
-                                                   for word in re.split('\W+',word) \
-                                                   if len(word)>0]))
-
-    logTimeIntervalWithMsg(s_time,"test set    : {}".format(test_1.takeSample(True,4,0)))
-
-    train1.cache()
-    test_1.cache()
-
-    if use_lexicon:
-        logTimeIntervalWithMsg(s_time,"##### BUILDING THE LEXICON #####")
-        training_words = train1.map (lambda(f,x):x)
-        logTimeIntervalWithMsg(s_time,"training_words: %i" %  training_words.count())
-        training_lexicon = training_words.distinct()
-        logTimeIntervalWithMsg(s_time,"training_lexicon: %i" % training_lexicon.count())
-        lexicon = training_lexicon.collect()
-
-
-    ##### PROCESS THE RDDs #####
-    ##### (file, [(word, count),(word, count)...]) tuples #####
-    train5 = wordCountPerFile(train1)
-    test_5 = wordCountPerFile(test_1)
-
-
+    trainingArray = processRDD(trainingSet,use_lexicon)
+    trainingSet =trainingArray[0]
+    if use_lexicon: lexicon = trainingArray[1]
+    testSet = processRDD(testSet,None)[0]
 
 print "\n"
 use_hash_signing = 1
@@ -262,9 +279,9 @@ for hashtable_size in range (1,100,1):
 
         if use_hash:
             logTimeIntervalWithMsg(s_time,'##### CREATE A DOC VECTOR OF HASHES  #####')
-            hashtrain6 = train5.map(lambda(f,x):(f,hashVector(x,hashtable_size,use_hash_signing)))
+            hashtrain6 = trainingSet.map(lambda(f,x):(f,hashVector(x,hashtable_size,use_hash_signing)))
             #print ("hashtrain6 sample:", hashtrain6.takeSample(True,4,0))
-            hashtest6  = test_5.map (lambda(f,x):(f,hashVector(x,hashtable_size,use_hash_signing)))
+            hashtest6  = testSet.map (lambda(f,x):(f,hashVector(x,hashtable_size,use_hash_signing)))
 
 
         if use_lexicon:
