@@ -249,6 +249,31 @@ def logPrint(string):
     print string if use_log else '.',
 
 
+
+def arrayOfFileRDDs(path,file_range):
+    rddArray = []
+    for k in file_range:
+        path = spamPath+'part'+str(k)
+        rdd = sc.wholeTextFiles(path)
+        rddArray.append(rdd)
+    return rddArray
+
+
+
+def trainingAndTestRDDs (rddArray, testIdx):
+    trainingRDD = None
+    for k in rddArray:
+        if k != testIdx:
+            if (trainingRDD):
+                trainingRDD = trainingRDD.union(trainingRDD)
+            else:
+                trainingRDD = rddArray[k]
+
+        return [trainingRDD,rddArray[testIdx]];
+
+
+
+
 def buildRDDs(path, validation_index, file_range):
     firstLoop = 1
     # for idx, k in enumerate(file_range)
