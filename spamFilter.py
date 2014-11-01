@@ -253,44 +253,31 @@ def logPrint(string):
 def arrayOfFileRDDs(path,file_range):
     rddArray = []
     for k in file_range:
-        path = spamPath+'part'+str(k)
+        path = spamPath+'part'+str(k+1)
         rdd = sc.wholeTextFiles(path)
         rddArray.append(rdd)
     return rddArray
 
 
-
 def trainingAndTestRDDs (rddArray, testIdx):
     trainingRDD = None
-    for k in rddArray:
+    for k,rdd in enumerate(rddArray):
         if k != testIdx:
             if (trainingRDD):
-                trainingRDD = trainingRDD.union(trainingRDD)
+                trainingRDD = trainingRDD.union(rdd)
             else:
-                trainingRDD = rddArray[k]
+                trainingRDD = rdd
 
-        return [trainingRDD,rddArray[testIdx]];
-
-
+    return [trainingRDD,rddArray[testIdx]];
 
 
 def buildRDDs(path, validation_index, file_range):
-    firstLoop = 1
-    # for idx, k in enumerate(file_range)
-    for k in file_range:
-        tmpPath = spamPath+'part'+str(k)
-        if k == validation_index:
-            testPath = tmpPath
-            testSet = sc.wholeTextFiles(tmpPath)
-        else:
-            tmpRDD = sc.wholeTextFiles(tmpPath)
-            if firstLoop == 1:
-                trainingSet = tmpRDD
-                firstLoop = 0
-            else:
-                trainingSet = trainingSet.union(tmpRDD)
+    fileRDDs = arrayOfFileRDDs(path,file_range)
+    validationPath = path+'part'+str(validation_index+1)
+    result = trainingAndTestRDDs(fileRDDs,validation_index)
+    result.append(validationPath)
+    return result
 
-    return (trainingSet, testSet, testPath)
 
 
 def lexiconArray(rdd):
@@ -319,6 +306,7 @@ def processRDD(rdd, create_lexicon):
                                  if len(word) > 0]))
     lexicon = lexiconArray(processedRDD) if create_lexicon else None
     processedRDD = wordCountPerFile(processedRDD)
+    logTimeIntervalWithMsg(processedRDD.take(1))
     return [processedRDD, lexicon]
 
 
@@ -422,8 +410,11 @@ if __name__ == "__main__":
     filehandle = open('out.txt', 'a')
     spamPath = sys.argv[1]
     validation_index = 1
+
     # os.path.walk()
-    r = range(1, 11)
+    r = range(0, 10)
+    rddArray =  [processRDD(rdd,None) for rdd in arrayOfFileRDDs(spamPath,r)]
+
     for v in r:
         print "\n"
         use_log = 1
@@ -446,10 +437,12 @@ if __name__ == "__main__":
 
         stopfile = sc.textFile(sys.argv[2], 1)
         stoplist = stopfile.flatMap(lambda x: re.split('\W+', x)).collect()
-        trainingArray = processRDD(trainingSet, use_lexicon)
-        trainingSet = trainingArray[0]
-        lexicon = trainingArray[1]
-        testSet = processRDD(testSet, None)[0]
+    # trainingArray = processRDD(trainingSet, use_lexicon)
+        trainingIndexes = range (v+1,v+1+len(rddArray))
+        trainingSet = [rddArray [i % len(rddArray)]for i in trainingIndexes]
+       #  trainingSet = rddArray[0]
+       # lexicon = trainingArray[1]
+        testSet = rddArray[v]
         use_hash_signing = 1
         use_log = 0
         string = "hSize\tsigned?\tTP\tFP\tFN\tTN\t" \
