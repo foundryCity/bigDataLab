@@ -1,8 +1,7 @@
-bigDataW4
+Big Data Lab
 =========
 
-big data, week 4
 
-Naive Bayes spam filtering using Spark and Python
+Text mining  using Spark and Python
 
-don't expect clean code - I am new to Python, so I am still playing around wtih the idioms
+
