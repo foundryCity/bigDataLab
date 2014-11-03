@@ -29,18 +29,9 @@ def initialiseSpark():
 """ INPUT  """
 
 def validateInput():
-    if len(sys.argv) != 3:
-        print >> sys.stderr, "Usage: spamPath <folder> stoplist<file>"
+    if len(sys.argv) != 2:
+        print >> sys.stderr, "Usage: spamPath <folder> (optional) stoplist<file>"
         exit(-1)
-
-# '''
-# def buildRDDs(path, validation_index):
-#     fileRDDs = arrayOfFileRDDs(path)
-#     validationPath = path+'part'+str(validation_index+1)
-#     result = trainingAndTestRDDs(fileRDDs,validation_index)
-#     result.append(validationPath)
-#     return result
-# '''
 
 
 ' PROCESS RDDS '
@@ -77,31 +68,7 @@ def wordCountPerFile(rdd):
     return result
 
 
-
-
-#
-# def processRDD_old(rdd, create_lexicon):
-#     ''' input: rdd as read from filesystem
-#         output: array of [processed RDD,lexicon]
-#         or [processed RDD] if create_lexicon is None
-#         '''
-#
-#     logTimeIntervalWithMsg("##### BUILDING (file, word) tuples #####")
-#
-#     rdd = rdd.flatMap(lambda (file, words):
-#                                ([(file[file.rfind("/")+1:], remPlural(word))
-#                                  for word in re.split('\W+', words)
-#                                  if len(word) > 0]))
-#     pprint(rdd.takeSample(True,4,0))
-#
-#     logTimeIntervalWithMsg("processRDD {}".format(rdd.takeSample(True,1,0)))
-#     lexicon = lexiconArray(rdd) if create_lexicon else None
-#     processedRDD = wordCountPerFile(rdd)
-#     logTimeIntervalWithMsg(rdd.take(1))
-#     return [rdd, lexicon]
-
-
-def processRDD(rdd, stop_list):
+def processRDD(rdd, stop_list=[]):
     '''
     :param rdd:  rdd as read from filesystem ('filename','file_contents')
     :param stop_list: [list, of, stop, words]
@@ -115,32 +82,6 @@ def processRDD(rdd, stop_list):
 
     flatmappedRDD = rdd.flatMap(lambda (file, words):
                                 ([(file[file.rfind("/")+1:], remPlural(word))
-                                 for word in re.split('\W+', words)
-                                 if len(word) > 0
-                                 and word not in stop_list
-                                 and remPlural(word) not in stop_list]))
-
-    # logTimeIntervalWithMsg("flatmappedRDD {}".format(flatmappedRDD.take(1)))
-    wordCountPerFileRDD = wordCountPerFile(flatmappedRDD)
-    # logTimeIntervalWithMsg("wordCountPerFileRDD {}".format(wordCountPerFileRDD.take(1)))
-    return wordCountPerFileRDD
-
-def processRDDWithPath(path, rdd, stop_list):
-    '''
-    :param path: folder name of rdd
-    :param rdd:  rdd as read from filesystem ('filename','file_contents')
-    :param stop_list: [list, of, stop, words]
-    :return:wordCountPerFileRDD [((path, filename),[(word,count)][(word,count)]...)]
-    '''
-    logfuncWithArgs()
-   # print("rdd: {}".format(rdd.collect()))
-
-
-    #logTimeIntervalWithMsg("##### BUILDING (file, word) tuples #####")
-
-
-    flatmappedRDD = rdd.flatMap(lambda (file, words):
-                                ([((path, file[file.rfind("/")+1:]), remPlural(word))
                                  for word in re.split('\W+', words)
                                  if len(word) > 0
                                  and word not in stop_list
@@ -327,22 +268,6 @@ def dictOfFileRDDs(path):
     return rddDict
 
 
-
-def trainingAndTestRDDs (rddArray, testIdx):
-    trainingRDD = None
-    for k,rdd in enumerate(rddArray):
-        if k != testIdx:
-            if (trainingRDD):
-                trainingRDD = trainingRDD.union(rdd)
-            else:
-                trainingRDD = rdd
-
-    return [trainingRDD,rddArray[testIdx]];
-
-
-
-
-
 ''' OUTPUT REPORTING '''
 
 
@@ -452,10 +377,10 @@ class-specific stats (class spam)
               confusionDict['Fmeasure3']))
 
 
-def reportResults(lexPrediction, hashPrediction, filehandle):
+def reportResults(lexPrediction, hashPrediction, filehandle, verbose=None):
     logTimeIntervalWithMsg('#####      EVALUATE THE RESULTS      #####')
 
-    if 0:  # set to 1 for verbose reporting
+    if verbose:
         if use_lexicon:
             print('____________________________________')
             print('#####      EVALUATION      #####')
@@ -564,7 +489,7 @@ def logPrint(string):
     print string if use_log else '.',
 
 
-
+'NEW FUNCS, UNFILED'
 
 def stopList(stop_file):
     '''
@@ -631,6 +556,8 @@ def mergeArrayOfDicts(arrayOfDicts,idx_to_exclude):
     return mergedDict
 
 
+' THE MAIN LOOP '
+
 if __name__ == "__main__":
 
     use_lexicon = 0
@@ -646,7 +573,10 @@ if __name__ == "__main__":
     sc = initialiseSpark()
     filehandle = open('out.txt', 'a')
     spamPath = sys.argv[1]
-    stop_list = stopList(sys.argv[2])
+    if len(sys.argv)>2:
+        stop_list = stopList(sys.argv[2])
+    else:
+        stop_list = []
     validation_index = 1
 
     dict = dictOfFileRDDs(spamPath)
