@@ -1,5 +1,6 @@
 import sys
-# from os import listdir
+from os import walk
+from pprint import pprint
 # from os.path import isfile, join
 import re
 # import numpy
@@ -9,21 +10,13 @@ from pyspark.mllib.classification import NaiveBayes
 # from datetime import datetime  #, time, timedelta
 from time import time
 from pyspark import SparkContext
-
-use_lexicon = 0
-use_hash = 1
-use_log = 1
-global s_time
-s_time = time()
-
-hashtable_size = 6001
+import inspect
+import collections
 
 
-def validateInput():
-    if len(sys.argv) != 3:
-        print >> sys.stderr, "Usage: spamPath <folder> stoplist<file>"
-        exit(-1)
 
+
+''' INITIALISING '''
 
 def initialiseSpark():
     global s_time
@@ -33,17 +26,142 @@ def initialiseSpark():
     return sc
 
 
+""" INPUT  """
+
+def validateInput():
+    if len(sys.argv) != 3:
+        print >> sys.stderr, "Usage: spamPath <folder> stoplist<file>"
+        exit(-1)
+
+# '''
+# def buildRDDs(path, validation_index):
+#     fileRDDs = arrayOfFileRDDs(path)
+#     validationPath = path+'part'+str(validation_index+1)
+#     result = trainingAndTestRDDs(fileRDDs,validation_index)
+#     result.append(validationPath)
+#     return result
+# '''
+
+
+' PROCESS RDDS '
+
 def remPlural(word):
     word = word.lower()
-    if word.endswith('s'):
-        return word[:-1]
-    else:
-        return word
+    return word[:-1] if word.endswith('s') else word
+
+def lexiconArray(rdd):
+    # input: rdd of (file,word) tuples
+    # output: [word1,word2,word3] array of distinct words
+    logTimeIntervalWithMsg("##### BUILDING THE LEXICON #####")
+    training_words = rdd.map(lambda(f, x): x)
+    logTimeIntervalWithMsg("training_words: %i" % training_words.count())
+    training_lexicon = training_words.distinct()
+    logTimeIntervalWithMsg("training_lexicon: %i" % training_lexicon.count())
+    return training_lexicon.collect()
+
+
+def wordCountPerFile(rdd):
+    logfuncWithArgs()
+    # input: rdd of (file,word) tuples
+    # return: rdd of (file, [(word, count),(word, count)...]) tuples
+    #logTimeIntervalWithMsg("##### BUILDING wordCountPerFile #####")
+    result = rdd.map(lambda(x): ((x[0], x[1]), 1))
+    # print('##### GETTING THE  ((file,word),n)
+    # WORDCOUNT PER (DOC, WORD) #####')
+    result = result.reduceByKey(add)
+    # print('##### REARRANGE AS  (file, [(word, count)])  #####')
+    result = result.map(lambda (a, b): (a[0], [(a[1], b)]))
+    # print ('##### CONCATENATE (WORD,COUNT) LIST PER FILE
+    # AS  (file, [(word, count),(word, count)...])  #####')
+    result = result.reduceByKey(add)
+    return result
+
+
+
+
+#
+# def processRDD_old(rdd, create_lexicon):
+#     ''' input: rdd as read from filesystem
+#         output: array of [processed RDD,lexicon]
+#         or [processed RDD] if create_lexicon is None
+#         '''
+#
+#     logTimeIntervalWithMsg("##### BUILDING (file, word) tuples #####")
+#
+#     rdd = rdd.flatMap(lambda (file, words):
+#                                ([(file[file.rfind("/")+1:], remPlural(word))
+#                                  for word in re.split('\W+', words)
+#                                  if len(word) > 0]))
+#     pprint(rdd.takeSample(True,4,0))
+#
+#     logTimeIntervalWithMsg("processRDD {}".format(rdd.takeSample(True,1,0)))
+#     lexicon = lexiconArray(rdd) if create_lexicon else None
+#     processedRDD = wordCountPerFile(rdd)
+#     logTimeIntervalWithMsg(rdd.take(1))
+#     return [rdd, lexicon]
+
+
+def processRDD(rdd, stop_list):
+    '''
+    :param rdd:  rdd as read from filesystem ('filename','file_contents')
+    :param stop_list: [list, of, stop, words]
+    :return:wordCountPerFileRDD [(filename,[(word,count)][(word,count)]...)]
+    '''
+    logfuncWithArgs()
+
+
+    #logTimeIntervalWithMsg("##### BUILDING (file, word) tuples #####")
+
+
+    flatmappedRDD = rdd.flatMap(lambda (file, words):
+                                ([(file[file.rfind("/")+1:], remPlural(word))
+                                 for word in re.split('\W+', words)
+                                 if len(word) > 0
+                                 and word not in stop_list
+                                 and remPlural(word) not in stop_list]))
+
+    # logTimeIntervalWithMsg("flatmappedRDD {}".format(flatmappedRDD.take(1)))
+    wordCountPerFileRDD = wordCountPerFile(flatmappedRDD)
+    # logTimeIntervalWithMsg("wordCountPerFileRDD {}".format(wordCountPerFileRDD.take(1)))
+    return wordCountPerFileRDD
+
+def processRDDWithPath(path, rdd, stop_list):
+    '''
+    :param path: folder name of rdd
+    :param rdd:  rdd as read from filesystem ('filename','file_contents')
+    :param stop_list: [list, of, stop, words]
+    :return:wordCountPerFileRDD [((path, filename),[(word,count)][(word,count)]...)]
+    '''
+    logfuncWithArgs()
+   # print("rdd: {}".format(rdd.collect()))
+
+
+    #logTimeIntervalWithMsg("##### BUILDING (file, word) tuples #####")
+
+
+    flatmappedRDD = rdd.flatMap(lambda (file, words):
+                                ([((path, file[file.rfind("/")+1:]), remPlural(word))
+                                 for word in re.split('\W+', words)
+                                 if len(word) > 0
+                                 and word not in stop_list
+                                 and remPlural(word) not in stop_list]))
+
+    # logTimeIntervalWithMsg("flatmappedRDD {}".format(flatmappedRDD.take(1)))
+    wordCountPerFileRDD = wordCountPerFile(flatmappedRDD)
+    # logTimeIntervalWithMsg("wordCountPerFileRDD {}".format(wordCountPerFileRDD.take(1)))
+    return wordCountPerFileRDD
+
+
+
+''' TRAINING and  PREDICTION  '''
 
 
 def vector(tupleList, lexicon):
-    '''input: list of tuples [(word,count),(word,count)...]
-    return: vector representing word counts in lexicon [0,1,4,2,..]'''
+    '''
+    :param tupleList: list of tuples [(word,count),(word,count)...]
+    :param lexicon: dictionary of all words in the test sets
+    :return:vector representing word counts in lexicon [0,1,4,2,..]
+    '''
     vector = [0] * (len(lexicon))
     for (x, y) in tupleList:
         # print ("x:",x, " y:",y, "lexicon(x): ",lexicon.index(x))
@@ -60,8 +178,12 @@ def sign_hash(x):
 
 
 def hashVectorSigned(tupleList, hashtable_size):
-    # input: list of tuples [(word,count),(word,count)...]
-    # return: hashTable
+    '''
+    :param tupleList: list of tuples [(word,count),(word,count)...]
+    :param hashtable_size: int size of hash array
+    :return:hashTable
+    '''
+    #logfuncWithArgs()
     hash_table = [0] * hashtable_size
     for (word, count)in tupleList:
         x = (hash(word) % hashtable_size) if hashtable_size else 0
@@ -69,9 +191,14 @@ def hashVectorSigned(tupleList, hashtable_size):
     return map(lambda x: abs(x), hash_table)
 
 
+
 def hashVectorUnsigned(tupleList, hashtable_size):
-    # input: list of tuples [(word,count),(word,count)...]
-    # return: hashTable
+    '''
+    :param tupleList: list of tuples [(word,count),(word,count)...]
+    :param hashtable_size: int size of hash array
+    :return:hashTable
+    '''
+    #logfuncWithArgs()
     hash_table = [0] * hashtable_size
     for (word, count)in tupleList:
         x = (hash(word) % hashtable_size) if hashtable_size else 0
@@ -86,37 +213,137 @@ def hashVector(tupleList, hashtable_size, use_hash_signing):
         return hashVectorUnsigned(tupleList, hashtable_size)
 
 
-def wordCountPerFile(rdd):
-    # input: rdd of (file,word) tuples
-    # return: rdd of (file, [(word, count),(word, count)...]) tuples
-    logTimeIntervalWithMsg("##### BUILDING wordCountPerFile #####")
-    result = rdd.map(lambda(x): ((x[0], x[1]), 1))
-    # print('##### GETTING THE  ((file,word),n)
-    # WORDCOUNT PER (DOC, WORD) #####')
-    result = result.reduceByKey(add)
-    # print('##### REARRANGE AS  (file, [(word, count)])  #####')
-    result = result.map(lambda (a, b): (a[0], [(a[1], b)]))
-    # print ('##### CONCATENATE (WORD,COUNT) LIST PER FILE
-    # AS  (file, [(word, count),(word, count)...])  #####')
-    result = result.reduceByKey(add)
-    return result
-
 
 def vectoriseWithHashtable(rdd, hashtable_size):
-    # input: rdd of (file, [(word, count),(word, count)...]) tuples
-    # return: rdd of (file,[vector]) tuples
-    logTimeIntervalWithMsg('##### CREATE A DOC VECTOR OF HASHES  #####')
+    '''
+    :param rdd:  ((path,file), [(word, count),(word, count)...]) tuples
+    :param hashtable_size: int size of hash array
+    :return: rdd of (<1|0>,[vector]) tuples
+    '''
+    #logfuncWithVals()
+    #logTimeIntervalWithMsg('##### CREATE A DOC VECTOR OF HASHES  #####')
+    #logTimeIntervalWithMsg('##### AND  REPLACE FILENAME WITH 1(SPAM) or 0(NOT SPAM)       #####')
+
     result = rdd.map(lambda(f, x):
-                     (f, hashVector(x, hashtable_size, use_hash_signing)))
+                     (1 if 'spmsg' in f else 0
+                      , hashVector(x, hashtable_size, use_hash_signing)))
     return result
 
 
 def vectoriseWithLexicon(rdd, lexicon):
-    global s_time
+    '''
+    :param rdd: (file, [(word, count),(word, count)...]) tuples
+    :param lexicon: array of words in the lexicon to match against
+    :return: rdd of (<1|0>,[sparse vector]) tuples
+    '''
     logTimeIntervalWithMsg(
         '##### CREATE A DOC VECTOR AGAINST THE LEXICON   #####')
-    result = rdd.map(lambda(f, wc): (f, vector(wc, lexicon)))
+    result = rdd.map(lambda(f, wc): (1 if 'spmsg' in f else 0
+                                     , vector(wc, lexicon)))
     return result
+
+
+def trainBayes(rdd):
+    '''
+    :param rdd:rdd of vectors (1,[1,0,0,3,4,2,...],0,[1,0,0,3,4,2,...],1,[1,0,0,3,4,2,...]..)
+    :return:naive bayes model to use in predict(rdd,nbModel)
+    '''
+    logTimeIntervalWithMsg('#####      MAP TO LABELLED POINTS      #####')
+    processedRDD = rdd.map(lambda(f, x): LabeledPoint(f, x))
+    logTimeIntervalWithMsg('#####      TRAIN THE NAIVE BAYES      #####')
+    nbModel = NaiveBayes.train(processedRDD, 1.0)
+    return nbModel
+
+
+def predict(rdd, nbModel):
+    '''
+    :param rdd:rdd of test vectors (<1|0>,[],<1|0>,[]
+    :param nbModel: naive bayes model derived from naiveBayes.train()
+    :return:
+    '''
+    result = rdd.map(lambda (f, x): (f,
+                                     int(nbModel.predict(x).item())))
+    return result
+
+
+def trainAndTest(trainingSet, testSet, use_lexicon, use_hash):
+    logfuncWithArgs()
+
+    if use_lexicon:
+
+        logTimeIntervalWithMsg('##### T R A I N I N G  #####')
+        trainingSet = vectoriseWithLexicon(trainingSet, lexicon)
+        nbModel = trainBayes(trainingSet)
+
+        logTimeIntervalWithMsg('##### T E S T I N G  #####')
+        testSet = vectoriseWithLexicon(testSet, lexicon)
+        lexPrediction = predict(testSet, nbModel)
+    else:
+        lexPrediction = None
+
+    if use_hash:
+
+        logTimeIntervalWithMsg('##### T R A I N I N G  #####')
+        trainingSet = vectoriseWithHashtable(trainingSet, hashtable_size)
+        nbModel = trainBayes(trainingSet)
+
+        logTimeIntervalWithMsg('##### T E S T I N G  #####')
+        testSet = vectoriseWithHashtable(testSet, hashtable_size)
+        hashPrediction = predict(testSet, nbModel)
+    else:
+        hashPrediction = None
+
+    return [lexPrediction, hashPrediction]
+
+
+def arrayOfFileRDDs(path):
+    '''
+    :param path: path to email folders
+    :return:array of rdds, one per folder
+    '''
+
+    folders = []
+    rdds = []
+    (_, folders, _) = walk(path).next()
+    # http://stackoverflow.com/a/3207973, see comment from misterbee
+    for folder in folders:
+        rdd = sc.wholeTextFiles(path+folder)
+        rdds.append(rdd)
+    return rdds
+
+
+def dictOfFileRDDs(path):
+    '''
+    :param path: path to email folders
+    :return:dictionary {path, rdd}, one rdd per folder
+    '''
+
+    rddDict = {}
+    (_, folders, _) = walk(path).next()
+    # http://stackoverflow.com/a/3207973, see comment from misterbee
+    for folder in folders:
+        rdd = sc.wholeTextFiles(path+folder)
+        rddDict[str(folder)] = rdd
+    return rddDict
+
+
+
+def trainingAndTestRDDs (rddArray, testIdx):
+    trainingRDD = None
+    for k,rdd in enumerate(rddArray):
+        if k != testIdx:
+            if (trainingRDD):
+                trainingRDD = trainingRDD.union(rdd)
+            else:
+                trainingRDD = rdd
+
+    return [trainingRDD,rddArray[testIdx]];
+
+
+
+
+
+''' OUTPUT REPORTING '''
 
 
 def confusionMatrix(tupleList):
@@ -225,115 +452,7 @@ class-specific stats (class spam)
               confusionDict['Fmeasure3']))
 
 
-def logTimeInterval():
-    if (use_log):
-        global s_time
-        # timedelta = (datetime.now() - s_time)
-        timedelta = time() - s_time
-        print ("log:{:7,.3f}".format(timedelta))
-
-
-def logTimeIntervalWithMsg(msg, filehandle=None):
-    if (use_log):
-        global s_time
-        message = msg if msg else ""
-        # timedelta = (datetime.now() - s_time)
-        timedelta = time() - s_time
-        string = "log:{:7,.3f} {}".format(timedelta, message)
-        print (string)
-        if filehandle:
-            filehandle.write("{}\n".format(string))
-
-
-def logPrint(string):
-    print string if use_log else '.',
-
-
-
-def arrayOfFileRDDs(path,file_range):
-    rddArray = []
-    for k in file_range:
-        path = spamPath+'part'+str(k+1)
-        rdd = sc.wholeTextFiles(path)
-        rddArray.append(rdd)
-    return rddArray
-
-
-def trainingAndTestRDDs (rddArray, testIdx):
-    trainingRDD = None
-    for k,rdd in enumerate(rddArray):
-        if k != testIdx:
-            if (trainingRDD):
-                trainingRDD = trainingRDD.union(rdd)
-            else:
-                trainingRDD = rdd
-
-    return [trainingRDD,rddArray[testIdx]];
-
-
-def buildRDDs(path, validation_index, file_range):
-    fileRDDs = arrayOfFileRDDs(path,file_range)
-    validationPath = path+'part'+str(validation_index+1)
-    result = trainingAndTestRDDs(fileRDDs,validation_index)
-    result.append(validationPath)
-    return result
-
-
-
-def lexiconArray(rdd):
-    global s_time
-    # input: rdd of (file,word) tuples
-    # output: [word1,word2,word3] array of distinct words
-    logTimeIntervalWithMsg("##### BUILDING THE LEXICON #####")
-    training_words = rdd.map(lambda(f, x): x)
-    logTimeIntervalWithMsg("training_words: %i" % training_words.count())
-    training_lexicon = training_words.distinct()
-    logTimeIntervalWithMsg("training_lexicon: %i" % training_lexicon.count())
-    return training_lexicon.collect()
-
-
-def processRDD(rdd, create_lexicon):
-    # input: rdd as read from filesystem
-    # output: array of [processed RDD,lexicon]
-    # or [processed RDD] if create_lexicon is None
-    global s_time
-
-    logTimeIntervalWithMsg("##### BUILDING (file, word) tuples #####")
-
-    processedRDD = rdd.flatMap(lambda (file, words):
-                               ([(file[file.rfind("/")+1:], remPlural(word))
-                                 for word in re.split('\W+', words)
-                                 if len(word) > 0]))
-    lexicon = lexiconArray(processedRDD) if create_lexicon else None
-    processedRDD = wordCountPerFile(processedRDD)
-    logTimeIntervalWithMsg(processedRDD.take(1))
-    return [processedRDD, lexicon]
-
-
-def trainBayes(rdd):
-    global s_time
-    logTimeIntervalWithMsg('#####      TEST WHETHER FILE IS SPAM       #####')
-    processedRDD = rdd.map(lambda(f, x): (1 if 'spmsg' in f else 0, x))
-    logTimeIntervalWithMsg('#####      MAP TO LABELLED POINTS      #####')
-    processedRDD = processedRDD.map(lambda(f, x): LabeledPoint(f, x))
-    logTimeIntervalWithMsg('#####      TRAIN THE NAIVE BAYES      #####')
-    nbModel = NaiveBayes.train(processedRDD, 1.0)
-    return nbModel
-
-
-def predict(rdd, nbModel):
-    global s_time
-    logTimeIntervalWithMsg('#####      RUN THE PREDICTION      #####')
-    result = rdd.map(lambda (f, x): (1 if 'spmsg' in f else 0,
-                                     int(nbModel.predict(x).item())))
-    if use_log:
-        print ("prediction sample: ", result.takeSample(False, 20, 0))
-    return result
-
-
 def reportResults(lexPrediction, hashPrediction, filehandle):
-    global s_time
-    timeDelta = time()-s_time
     logTimeIntervalWithMsg('#####      EVALUATE THE RESULTS      #####')
 
     if 0:  # set to 1 for verbose reporting
@@ -351,109 +470,245 @@ def reportResults(lexPrediction, hashPrediction, filehandle):
             printConfusionDict(confusionDict(hashPrediction.collect()))
 
     else:  # 1-line reporting (for spreadsheets)
-
         if use_lexicon:
-            cd = confusionDict(lexPrediction.collect())
-            string = "L\t\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f\t%.3f" % (
-                cd['TP'], cd['FP'], cd['FN'], cd['TN'],
-                cd['Recall'], cd['Precision'], cd['Fmeasure'], cd['Accuracy'])
-            if filehandle:
-                filehandle.write(string, "\n")
-            print(string)
+            reportResultsForLexiconOnOneLine(lexPrediction,filehandle)
 
         if use_hash:
-            cd = confusionDict(hashPrediction.collect())
-            string = "%i\t%i\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f\t%.3f\t%.3f" \
-                     % (hashtable_size, use_hash_signing,
-                        cd['TP'], cd['FP'], cd['FN'], cd['TN'],
-                        cd['Recall'], cd['Precision'],
-                        cd['Fmeasure'], cd['Accuracy'], timeDelta)
-            if filehandle:
-                filehandle.write("{}\n".format(string))
-            print(string)
+            reportResultsFrorHashOnOneLine(hashPrediction,filehandle)
+
+def reportResultsForLexiconOnOneLine(lexPrediction,filehandle):
+    '''
+    :param lexPredicion:predicition generate from lexicon
+    :param filefilehandle: file to write results to
+    :return:None
+    '''
+    cd = confusionDict(lexPrediction.collect())
+    string = "L\t\t%i\t%i\t%i\t%i\t%.3f\t%.3f\t%.3f\t%.3f" % (
+        cd['TP'], cd['FP'], cd['FN'], cd['TN'],
+        cd['Recall'], cd['Precision'], cd['Fmeasure'], cd['Accuracy'])
+    if filehandle:
+        filehandle.write(string, "\n")
+    print(string)
 
 
-def trainAndTest(trainingSet, testSet, use_lexicon, use_hash):
+def reportResultsFrorHashOnOneLine(hash_prediction,hashtable_size,use_hash_signing, filehandle):
+    '''
+    :param hashPrediction:prediction generate from hashes
+    :param filefilehandle: file to write results to
+    :return:None
+    '''
+
+    cd = confusionDict(hash_prediction.collect())
     global s_time
+    time_delta = timeDeltas()
+    string = "{0}\t{1}\t{2[TP]}\t{2[FP]}\t{2[FN]}\t{2[TN]}\t" \
+             "{2[Recall]:.3f}\t{2[Precision]:.3f}\t{2[Fmeasure]:.3f}\t{2[Accuracy]:.3f}\t" \
+             "{3[time_since_start]:.3f} {3[time_since_last]:.3f}".format(
+     hashtable_size, use_hash_signing, cd, time_delta)
+    if filehandle:
+        filehandle.write("{}\n".format(string))
+    print(string)
 
-    if use_lexicon:
 
-        logTimeIntervalWithMsg('##### T R A I N I N G  #####')
-        trainingSet = vectoriseWithLexicon(trainingSet, lexicon)
-        nbModel = trainBayes(trainingSet)
 
-        logTimeIntervalWithMsg('##### T E S T I N G  #####')
-        testSet = vectoriseWithLexicon(testSet, lexicon)
-        lexPrediction = predict(testSet, nbModel)
-    else:
-        lexPrediction = None
 
-    if use_hash:
+''' LOGGING '''
 
-        logTimeIntervalWithMsg('##### T R A I N I N G  #####')
-        trainingSet = vectoriseWithHashtable(trainingSet, hashtable_size)
-        nbModel = trainBayes(trainingSet)
+def timeDeltas():
+    global s_time
+    global i_time
+    d_time = time()
+    delta_since_start = d_time - s_time
+    delta_since_last = d_time - i_time
+    i_time = d_time
+    return {"time_since_start":delta_since_start,'time_since_last':delta_since_last}
 
-        logTimeIntervalWithMsg('##### T E S T I N G  #####')
-        testSet = vectoriseWithHashtable(testSet, hashtable_size)
-        hashPrediction = predict(testSet, nbModel)
-    else:
-        hashPrediction = None
+def logfuncWithArgs(start_time=None):
+    stime = start_time if start_time else ""
+    return logfunc(stime,"args",'novals',sys._getframe().f_back)
 
-    return [lexPrediction, hashPrediction]
+def logfuncWithVals(start_time=None):
+    stime = start_time if start_time else ""
+    return logfunc(stime,"noargs",'vals',sys._getframe().f_back)
+
+
+def logfunc(start_time=None, args=None, vals=None, frame=None):
+    fargs={}
+    time_deltas = timeDeltas()
+    frame = frame if frame else sys._getframe().f_back
+    line_number = frame.f_code.co_firstlineno
+    name = frame.f_code.co_name
+    argvals = frame.f_locals if vals is "vals" else ""
+    argnames = inspect.getargvalues(frame)[0] if args is "args" else ""
+    comments = inspect.getcomments(frame)
+    comments = comments if comments else ""
+    print ("{comments}{time_s: >9,.3f} {time_i: >7,.3f} {name:} {argmames} {argvalse}".format(
+        # comments,elapsed_time,line_number,name,argnames,argvals))
+        comments=comments,time_s=time_deltas['time_since_start'],time_i=time_deltas['time_since_last'],line=line_number,name=name,argmames=argnames,argvalse=argvals))
+
+
+
+def logTimeIntervalWithMsg(msg, filehandle=None):
+    if (use_log):
+        time_deltas = timeDeltas()
+        message = msg if msg else ""
+        delta_since_start = time_deltas['time_since_start']
+        delta_since_last = time_deltas['time_since_last']
+        string = "log:{0[time_since_start]:7,.3f} log:{0[time_since_last]:7,.3f} {1:}".format(time_deltas, message)
+        print (string)
+        if filehandle:
+            filehandle.write("{}\n".format(string))
+
+
+def logPrint(string):
+    print string if use_log else '.',
+
+
+
+
+def stopList(stop_file):
+    '''
+    :param stop_file: path to file of stopwords
+    :return:python array of stopwords
+    '''
+    rdd = sc.textFile(stop_file)
+    return rdd.flatMap (lambda x: re.split('\W+',x)).collect()
+
+
+def arrayOfDictsOfRDDs(keys,rdds):
+    '''
+    :param keys: list of hash table sizes (ints) we want to test against
+    :param rdds: list of rdds
+    :return:array of dictionarys of vectorised rdds
+    '''
+    logfuncWithArgs()
+    arrayOfHashDicts = []
+    for (idx,rdd) in enumerate(rdds):
+        #orderedDict = collections.OrderedDict
+        dict={}
+        arrayOfHashDicts.append(dict)
+        for hash_size in keys:
+            dict[str(hash_size)] = vectoriseWithHashtable(rdd,hash_size)
+    return arrayOfHashDicts
+
+def mergeDicts(dictionary, newDict):
+    '''
+    :param dictionary: dictionary of key:RDD pairs (possibly empty)
+    :param newDict: dictionary of key:RDD pairs
+    :return:
+    '''
+    #logfuncWithArgs()
+
+    dictionary = {key: rdd.union(newDict[key]) for key, rdd in dictionary.iteritems()}
+    for key in newDict:
+        if key not in dictionary.keys():
+            dictionary[key] = newDict[key]
+
+    '''
+    for key in dictionary:
+        print("{} {}".format(key, len(dictionary[key].collect())))
+
+    for key in newDict:
+        if key in dictionary:
+            dictionary[key] = dictionary[key].union(newDict[key])
+        else:
+            dictionary[key] = newDict[key]
+    '''
+    return dictionary
+
+
+def mergeArrayOfDicts(arrayOfDicts,idx_to_exclude):
+    '''
+    :param arrayOfDicts: [  {hash_size:rddVector, hash_size:rddVector, hash_size:rddVector}...},  {hash_size:rddVector, hash_size:rddVector, hash_size:rddVector}...}...]
+    :param idx_to_exclude: index of array item to exclude
+    :return:single dictionary comprising all array dicts except the idx_to_exclude dict
+    '''
+    #logfuncWithArgs()
+    mergedDict = {}
+    for idx,dict in enumerate(arrayOfDicts):
+        if idx is not idx_to_exclude:
+            mergedDict = mergeDicts(mergedDict,dict)
+    return mergedDict
 
 
 if __name__ == "__main__":
 
+    use_lexicon = 0
+    use_hash = 1
+    use_hash_signing = 1
+
+    use_log = 1
+    global s_time
+    global i_time
+    s_time = time()
+    i_time = s_time
     validateInput()
     sc = initialiseSpark()
     filehandle = open('out.txt', 'a')
     spamPath = sys.argv[1]
+    stop_list = stopList(sys.argv[2])
     validation_index = 1
 
-    # os.path.walk()
-    r = range(0, 10)
-    rddArray =  [processRDD(rdd,None) for rdd in arrayOfFileRDDs(spamPath,r)]
+    dict = dictOfFileRDDs(spamPath)
+    rdds = []
+    paths = []
+    for path, rdd in dict.iteritems():
+        rdds.append(processRDD(rdd,stop_list))
+        paths.append(path)
 
-    for v in r:
-        print "\n"
+    hash_table_sizes = [100,300,1000,3000,10000]
+    array_of_dicts_of_rdds = arrayOfDictsOfRDDs(hash_table_sizes
+                                ,rdds)
+    '''
+    now we have an array of dictionaries of rdds. One array entry per email directory
+    [  {'100':rddVector, '300':rddVector, 1000:rddVector}...}
+    ,  {'100':rddVector, '300':rddVector, 1000:rddVector}...}
+    ,  {'100':rddVector, '300':rddVector, 1000:rddVector}...}
+    ...
+    ]
+    each rddVector has the form ((<1|0>,[vector]),(<1|0>,[vector]),(<1|0>,[vector]),...)
+    then we access as arrayOfDicts[0]['100']...
+
+    which could just as well be a dict of arrays:
+    {
+    '100':[vector1, vector2, ...]
+    '300':[vector1, vector2, ...]
+    ...
+    }
+
+    then we access as dictOfArrays['100'][0]
+    '''
+    '''
+    for (idx,rddDict) in enumerate(arrayOfHashDicts):
+    '''
+    logTimeIntervalWithMsg('starting the folds...')
+
+    for (idx,testDict) in enumerate(array_of_dicts_of_rdds):
         use_log = 1
-        s_time = time()
+        #print("\n")
+        logTimeIntervalWithMsg('\n\n#####  LAP:{} {}\n'.format(idx, paths[idx]))
+        logTimeIntervalWithMsg('mergeArrayOfDicts - start')
+        training_dict = mergeArrayOfDicts(array_of_dicts_of_rdds,idx)
+        logTimeIntervalWithMsg('mergeArrayOfDicts - end')
 
-        logTimeIntervalWithMsg('\n\n#####  LAP:{}\n'.format(v), filehandle)
+        test_dict = array_of_dicts_of_rdds[idx]
+        #print(testDict['100'].take(3))
 
-        # logTimeIntervalWithMsg('##### ROTATING  LAP:{}'.format(v))
-        # rom os import listdir
-
-        # from os.path import isfile, join
-        # onlyfiles = [ f for f in listdir(spamPath) if not isfile(join(mypath,f)) ]
-        rddArray = buildRDDs(spamPath, v, r)
-        trainingSet = rddArray[0]
-        testSet = rddArray[1]
-        testFile = rddArray[2]
-        # trainingSet = sc.wholeTextFiles(sys.argv[1], 1)
-        logTimeIntervalWithMsg('#####  Test file:{}'
-                               .format(testFile), filehandle)
-
-        stopfile = sc.textFile(sys.argv[2], 1)
-        stoplist = stopfile.flatMap(lambda x: re.split('\W+', x)).collect()
-    # trainingArray = processRDD(trainingSet, use_lexicon)
-        trainingIndexes = range (v+1,v+1+len(rddArray))
-        trainingSet = [rddArray [i % len(rddArray)]for i in trainingIndexes]
-       #  trainingSet = rddArray[0]
-       # lexicon = trainingArray[1]
-        testSet = rddArray[v]
+        logTimeIntervalWithMsg('array_of_dicts_of_rdds - end')
         use_hash_signing = 1
         use_log = 0
         string = "hSize\tsigned?\tTP\tFP\tFN\tTN\t" \
-        "Recall\tPrcsion\tF-mesr\tAccuracy\tTime\n"
+        "Recall\tPrcsion\tFMeasre\tAcc\tTime"
         print(string)
-        if filehandle:
-            filehandle.write("{}\n".format(string))
-        for hashtable_size in [100, 300, 1000, 3000, 10000]:
-            # for hashtable_size in range (500,20000,500):
-            (lexPrediction, hashPrediction) = trainAndTest(
-                trainingSet, testSet, use_lexicon, use_hash)
-            reportResults(lexPrediction, hashPrediction, filehandle)
+        #this bits really ugly
+        keys = sorted([int(key) for key in training_dict])
+        keys = [str(key) for key in keys]
+        for hash_table_size in keys:
+            logTimeIntervalWithMsg('##### T R A I N I N G  #####')
+            nbModel = trainBayes(training_dict[hash_table_size])
+            logTimeIntervalWithMsg('##### T E S T I N G  #####')
+            hash_prediction = predict(test_dict[hash_table_size], nbModel)
+            reportResultsFrorHashOnOneLine(hash_prediction,hash_table_size,use_hash_signing, filehandle)
+
 
     filehandle.close()
