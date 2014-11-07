@@ -29,7 +29,7 @@ def initialiseSpark():
 """ INPUT  """
 
 def validateInput():
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 4:
         print >> sys.stderr, "Usage: spamPath <folder> (optional) stoplist<file>"
         exit(-1)
 
@@ -605,10 +605,8 @@ if __name__ == "__main__":
     sc = initialiseSpark()
     filehandle = open('out.txt', 'a')
     spamPath = sys.argv[1]
-    if len(sys.argv)>2:
-        stop_list = stopList(sys.argv[2])
-    else:
-        stop_list = []
+    stop_list = stopList(sys.argv[2]) if len(sys.argv)>2 else []
+    test_set = int(sys.argv[3]) if len(sys.argv)>3 else 0
     validation_index = 1
 
     dict = dictOfFileRDDs(spamPath)
@@ -648,7 +646,6 @@ if __name__ == "__main__":
     test_results = {}
     nb_model_for_hash_sizes = {}
     nbModel = ""
-    test_set = 2
     test_dict = array_of_dicts_of_rdds.pop(test_set)
     paths.pop(test_set)
     for (validation_idx, validation_dict) in enumerate(array_of_dicts_of_rdds):
