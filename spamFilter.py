@@ -648,8 +648,9 @@ if __name__ == "__main__":
     test_results = {}
     nb_model_for_hash_sizes = {}
     nbModel = ""
-    test_set = 1
+    test_set = 2
     test_dict = array_of_dicts_of_rdds.pop(test_set)
+    paths.pop(test_set)
     for (validation_idx, validation_dict) in enumerate(array_of_dicts_of_rdds):
         training_dict = mergeArrayOfDictsWithPop(array_of_dicts_of_rdds,validation_idx)
         use_log = 1
