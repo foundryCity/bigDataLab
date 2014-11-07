@@ -430,11 +430,13 @@ def reportResultsForHashOnOneLine(hash_prediction,hashtable_size,use_hash_signin
              "{2[Recall]:.3f}\t{2[Precision]:.3f}\t{2[Fmeasure]:.3f}\t{2[Accuracy]:.3f}\t" \
              "{3[time_since_start]:.3f} {3[time_since_last]:.3f}".format(
      hashtable_size, use_hash_signing, cd, time_delta)
+    filePrint(string,filehandle)
+    return cd
+
+def filePrint(string,filehandle=None):
     if filehandle:
         filehandle.write("{}\n".format(string))
     print(string)
-    return cd
-
 
 def reportResultsForAll(results,use_hash_signing, filehandle=None):
     '''
@@ -499,9 +501,8 @@ def logTimeIntervalWithMsg(msg, filehandle=None):
         delta_since_start = time_deltas['time_since_start']
         delta_since_last = time_deltas['time_since_last']
         string = "log:{0[time_since_start]:7,.3f} log:{0[time_since_last]:7,.3f} {1:}".format(time_deltas, message)
-        print (string)
-        if filehandle:
-            filehandle.write("{}\n".format(string))
+        filePrint(string,filehandle)
+
 
 
 def logPrint(string):
@@ -542,7 +543,6 @@ def mergeDicts(dictionary, newDict):
     :return:
     '''
     #logfuncWithVals()
-
     dictionary = {key: rdd.union(newDict[key]) for key, rdd in dictionary.iteritems()}
     for key in newDict:
         if key not in dictionary.keys():
@@ -561,7 +561,7 @@ def mergeDicts(dictionary, newDict):
     return dictionary
 
 
-def mergeArrayOfDicts(arrayOfDicts,idx_to_exclude):
+def mergeArrayOfDictsWithPop(arrayOfDicts,idx_to_exclude):
     '''
     :param arrayOfDicts: [  {hash_size:rddVector, hash_size:rddVector, hash_size:rddVector}...},  {hash_size:rddVector, hash_size:rddVector, hash_size:rddVector}...}...]
     :param idx_to_exclude: index of array item to exclude
@@ -571,6 +571,19 @@ def mergeArrayOfDicts(arrayOfDicts,idx_to_exclude):
     mergedDict = {}
     for idx,dict in enumerate(arrayOfDicts):
         if idx is not idx_to_exclude:
+            mergedDict = mergeDicts(mergedDict,dict)
+    return mergedDict
+
+
+def mergeArrayOfDicts(arrayOfDicts):
+    '''
+    :param arrayOfDicts: [  {hash_size:rddVector, hash_size:rddVector, hash_size:rddVector}...},  {hash_size:rddVector, hash_size:rddVector, hash_size:rddVector}...}...]
+    :param idx_to_exclude: index of array item to exclude
+    :return:single dictionary comprising all array dicts except the idx_to_exclude dict
+    '''
+    #logfuncWithArgs()
+    mergedDict = {}
+    for idx,dict in enumerate(arrayOfDicts):
             mergedDict = mergeDicts(mergedDict,dict)
     return mergedDict
 
@@ -630,14 +643,29 @@ if __name__ == "__main__":
     '''
     for (idx,rddDict) in enumerate(arrayOfHashDicts):
     '''
-    logTimeIntervalWithMsg('starting the folds...')
-    results = {}
-    for (idx, test_dict) in enumerate(array_of_dicts_of_rdds):
+    logTimeIntervalWithMsg('starting the folds...',filehandle)
+    validation_results = {}
+    test_results = {}
+    for (test_idx, test_dict) in enumerate(array_of_dicts_of_rdds):
+        validation_idx = (test_idx+1) % len(array_of_dicts_of_rdds)
+        validation_dict = array_of_dicts_of_rdds[validation_idx]
+        training_dict = {}
+        for (idx, dict) in enumerate(array_of_dicts_of_rdds):
+            #print("idx: {}".format(idx))
+            if idx not in [validation_idx, test_idx]:
+                #print("idx:{} not in: {}".format(idx,[validation_idx, test_idx]))
+                training_dict = mergeDicts(training_dict, dict)
+
         use_log = 1
         #print("\n")
-        logTimeIntervalWithMsg('\n\n#####  LAP:{} {}\n'.format(idx, paths[idx]))
+        logTimeIntervalWithMsg('''
+
+#####  LAP:{0}     test index:{0} path:{1}
+           validation index:{2} path:{3}
+
+'''.format(test_idx, paths[test_idx],validation_idx,paths[validation_idx]),filehandle)
         # logTimeIntervalWithMsg('mergeArrayOfDicts - start')
-        training_dict = mergeArrayOfDicts(array_of_dicts_of_rdds,idx)
+
        #  logTimeIntervalWithMsg('mergeArrayOfDicts - end')
 
 
@@ -646,17 +674,18 @@ if __name__ == "__main__":
         use_log = 0
         string = "hSize\tsigned?\tTP\tFP\tFN\tTN\t" \
         "Recall\tPrcsion\tFMeasre\tAcc\tTime"
-        print(string)
+        filePrint(string,filehandle)
         #this bits really ugly
         keys = sorted([int(key) for key in training_dict])
         keys = [str(key) for key in keys]
+
         results_for_fold_dict = {}
         for hash_table_size in keys:
             logTimeIntervalWithMsg('##### T R A I N I N G  #####')
             nbModel = trainBayes(training_dict[hash_table_size])
             logTimeIntervalWithMsg('##### T E S T I N G  #####')
             hash_prediction = predict(test_dict[hash_table_size], nbModel)
-            results_for_fold_dict['hash_table_size'] = hash_prediction
+            results_for_fold_dict[hash_table_size] = hash_prediction
             #resultDict[hash_table_size] = hash_prediction
             reportResultsForHashOnOneLine(hash_prediction,hash_table_size,use_hash_signing, filehandle)
             results_for_fold_dict[hash_table_size] = hash_prediction
@@ -664,17 +693,17 @@ if __name__ == "__main__":
 
 
         #pprint (results_for_fold_dict)
-        results = mergeDicts(results,results_for_fold_dict)
+        validation_results = mergeDicts(validation_results,results_for_fold_dict)
 
 
 
     'summarise results'
-    print ("summary results")
+    filePrint ("\n\nsummary results\n",filehandle)
     string = "hSize\tsigned?\tTP\tFP\tFN\tTN\t" \
         "Recall\tPrcsion\tFMeasre\tAcc\tTime"
-    print(string)
+    filePrint(string,filehandle)
     for hash_table_size in hash_table_sizes:
-        reportResultsForHashOnOneLine(results[str(hash_table_size)],hash_table_size,use_hash_signing, filehandle)
+        reportResultsForHashOnOneLine(validation_results[str(hash_table_size)],hash_table_size,use_hash_signing, filehandle)
 
 
 
