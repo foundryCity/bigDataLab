@@ -29,7 +29,7 @@ def initialiseSpark():
 """ INPUT  """
 
 def validateInput():
-    if len(sys.argv) != 2:
+    if len(sys.argv) != 3:
         print >> sys.stderr, "Usage: spamPath <folder> (optional) stoplist<file>"
         exit(-1)
 
@@ -416,7 +416,7 @@ def reportResultsForLexiconOnOneLine(lexPrediction,filehandle):
     print(string)
 
 
-def reportResultsFrorHashOnOneLine(hash_prediction,hashtable_size,use_hash_signing, filehandle):
+def reportResultsForHashOnOneLine(hash_prediction,hashtable_size,use_hash_signing, filehandle=None):
     '''
     :param hashPrediction:prediction generate from hashes
     :param filefilehandle: file to write results to
@@ -433,6 +433,25 @@ def reportResultsFrorHashOnOneLine(hash_prediction,hashtable_size,use_hash_signi
     if filehandle:
         filehandle.write("{}\n".format(string))
     print(string)
+    return cd
+
+
+def reportResultsForAll(results,use_hash_signing, filehandle=None):
+    '''
+    :param results:dictionary of results per hash_table_size N-fold array
+    :param use_hash_signing: (BOOL) are we using hash_signing?
+    :param filehandle: file to write results to
+    :return:None
+    '''
+
+
+
+
+    '''derive an average from all of the results'''
+    ''' {100 => summary for 100
+         300 => summary for 300
+         ....
+         100 => summaryDict}'''
 
 
 
@@ -522,7 +541,7 @@ def mergeDicts(dictionary, newDict):
     :param newDict: dictionary of key:RDD pairs
     :return:
     '''
-    #logfuncWithArgs()
+    #logfuncWithVals()
 
     dictionary = {key: rdd.union(newDict[key]) for key, rdd in dictionary.iteritems()}
     for key in newDict:
@@ -612,19 +631,17 @@ if __name__ == "__main__":
     for (idx,rddDict) in enumerate(arrayOfHashDicts):
     '''
     logTimeIntervalWithMsg('starting the folds...')
-
-    for (idx,testDict) in enumerate(array_of_dicts_of_rdds):
+    results = {}
+    for (idx, test_dict) in enumerate(array_of_dicts_of_rdds):
         use_log = 1
         #print("\n")
         logTimeIntervalWithMsg('\n\n#####  LAP:{} {}\n'.format(idx, paths[idx]))
-        logTimeIntervalWithMsg('mergeArrayOfDicts - start')
+        # logTimeIntervalWithMsg('mergeArrayOfDicts - start')
         training_dict = mergeArrayOfDicts(array_of_dicts_of_rdds,idx)
-        logTimeIntervalWithMsg('mergeArrayOfDicts - end')
+       #  logTimeIntervalWithMsg('mergeArrayOfDicts - end')
 
-        test_dict = array_of_dicts_of_rdds[idx]
-        #print(testDict['100'].take(3))
 
-        logTimeIntervalWithMsg('array_of_dicts_of_rdds - end')
+        # logTimeIntervalWithMsg('array_of_dicts_of_rdds - end')
         use_hash_signing = 1
         use_log = 0
         string = "hSize\tsigned?\tTP\tFP\tFN\tTN\t" \
@@ -633,12 +650,34 @@ if __name__ == "__main__":
         #this bits really ugly
         keys = sorted([int(key) for key in training_dict])
         keys = [str(key) for key in keys]
+        results_for_fold_dict = {}
         for hash_table_size in keys:
             logTimeIntervalWithMsg('##### T R A I N I N G  #####')
             nbModel = trainBayes(training_dict[hash_table_size])
             logTimeIntervalWithMsg('##### T E S T I N G  #####')
             hash_prediction = predict(test_dict[hash_table_size], nbModel)
-            reportResultsFrorHashOnOneLine(hash_prediction,hash_table_size,use_hash_signing, filehandle)
+            results_for_fold_dict['hash_table_size'] = hash_prediction
+            #resultDict[hash_table_size] = hash_prediction
+            reportResultsForHashOnOneLine(hash_prediction,hash_table_size,use_hash_signing, filehandle)
+            results_for_fold_dict[hash_table_size] = hash_prediction
+            #pprint (results_for_fold_dict[hash_table_size].take(1))
+
+
+        #pprint (results_for_fold_dict)
+        results = mergeDicts(results,results_for_fold_dict)
+
+
+
+    'summarise results'
+    print ("summary results")
+    string = "hSize\tsigned?\tTP\tFP\tFN\tTN\t" \
+        "Recall\tPrcsion\tFMeasre\tAcc\tTime"
+    print(string)
+    for hash_table_size in hash_table_sizes:
+        reportResultsForHashOnOneLine(results[str(hash_table_size)],hash_table_size,use_hash_signing, filehandle)
+
+
+
 
 
     filehandle.close()
