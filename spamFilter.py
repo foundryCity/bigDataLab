@@ -646,34 +646,23 @@ if __name__ == "__main__":
     logTimeIntervalWithMsg('starting the folds...',filehandle)
     validation_results = {}
     test_results = {}
-    for (test_idx, test_dict) in enumerate(array_of_dicts_of_rdds):
-        validation_idx = (test_idx+1) % len(array_of_dicts_of_rdds)
-        validation_dict = array_of_dicts_of_rdds[validation_idx]
-        training_dict = {}
-        for (idx, dict) in enumerate(array_of_dicts_of_rdds):
-            #print("idx: {}".format(idx))
-            if idx not in [validation_idx, test_idx]:
-                #print("idx:{} not in: {}".format(idx,[validation_idx, test_idx]))
-                training_dict = mergeDicts(training_dict, dict)
-
+    nb_model_for_hash_sizes = {}
+    nbModel = ""
+    test_set = 1
+    test_dict = array_of_dicts_of_rdds.pop(test_set)
+    for (validation_idx, validation_dict) in enumerate(array_of_dicts_of_rdds):
+        training_dict = mergeArrayOfDictsWithPop(array_of_dicts_of_rdds,validation_idx)
         use_log = 1
-        #print("\n")
         logTimeIntervalWithMsg('''
 
-#####  LAP:{0}     test index:{0} path:{1}
-           validation index:{2} path:{3}
+#####  LAP:{0}     validation index:{0} path:{1}
 
-'''.format(test_idx, paths[test_idx],validation_idx,paths[validation_idx]),filehandle)
-        # logTimeIntervalWithMsg('mergeArrayOfDicts - start')
-
-       #  logTimeIntervalWithMsg('mergeArrayOfDicts - end')
+'''.format(validation_idx, paths[validation_idx]),filehandle)
 
 
-        # logTimeIntervalWithMsg('array_of_dicts_of_rdds - end')
         use_hash_signing = 1
         use_log = 0
-        string = "hSize\tsigned?\tTP\tFP\tFN\tTN\t" \
-        "Recall\tPrcsion\tFMeasre\tAcc\tTime"
+        string = "hSize\tsigned?\tTP\tFP\tFN\tTN\tRecall\tPrcsion\tFMeasre\tAcc\tTime"
         filePrint(string,filehandle)
         #this bits really ugly
         keys = sorted([int(key) for key in training_dict])
@@ -683,16 +672,12 @@ if __name__ == "__main__":
         for hash_table_size in keys:
             logTimeIntervalWithMsg('##### T R A I N I N G  #####')
             nbModel = trainBayes(training_dict[hash_table_size])
+            nb_model_for_hash_sizes[hash_table_size] = nbModel
             logTimeIntervalWithMsg('##### T E S T I N G  #####')
-            hash_prediction = predict(test_dict[hash_table_size], nbModel)
+            hash_prediction = predict(validation_dict[hash_table_size], nbModel)
             results_for_fold_dict[hash_table_size] = hash_prediction
-            #resultDict[hash_table_size] = hash_prediction
             reportResultsForHashOnOneLine(hash_prediction,hash_table_size,use_hash_signing, filehandle)
-            results_for_fold_dict[hash_table_size] = hash_prediction
-            #pprint (results_for_fold_dict[hash_table_size].take(1))
 
-
-        #pprint (results_for_fold_dict)
         validation_results = mergeDicts(validation_results,results_for_fold_dict)
 
 
@@ -704,6 +689,18 @@ if __name__ == "__main__":
     filePrint(string,filehandle)
     for hash_table_size in hash_table_sizes:
         reportResultsForHashOnOneLine(validation_results[str(hash_table_size)],hash_table_size,use_hash_signing, filehandle)
+    filePrint ("\n\ntest results (test set is set {})\n".format(test_set),filehandle)
+    string = "hSize\tsigned?\tTP\tFP\tFN\tTN\t" \
+        "Recall\tPrcsion\tFMeasre\tAcc\tTime"
+    keys = sorted([int(key) for key in test_dict])
+    keys = [str(key) for key in keys]
+    test_results_dict = {}
+    for hash_table_size in keys:
+        test_prediction = predict(test_dict[str(hash_table_size)],nb_model_for_hash_sizes[hash_table_size])
+        test_results_dict[hash_table_size] = test_prediction
+
+        reportResultsForHashOnOneLine(test_results_dict[str(hash_table_size)],hash_table_size,use_hash_signing, filehandle)
+
 
 
 
