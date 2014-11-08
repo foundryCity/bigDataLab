@@ -280,6 +280,8 @@ def confusionMatrix(tupleList):
 
 def confusionDict(tupleList):
     mx = [0, 0, 0, 0]
+    time_delta = timeDeltas()
+
     for (x, y) in tupleList:
         mx[((x << 1) + y)] += 1
     dict = {'TN': mx[0], 'FP': mx[1], 'FN': mx[2], 'TP': mx[3]}
@@ -318,6 +320,9 @@ def confusionDict(tupleList):
     dict['Fmeasure3'] = \
         2 * dict['Precision'] * dict['Recall'] / (dict['Precision'] + dict['Recall']) \
         if (dict['Precision'] + dict['Recall'] > 0) else 0
+    dict['time_since_last'] = time_delta['time_since_last']
+    dict['time_since_start'] = time_delta['time_since_start']
+
     return dict
 
 
@@ -424,12 +429,10 @@ def reportResultsForHashOnOneLine(hash_prediction,hashtable_size,use_hash_signin
     '''
 
     cd = confusionDict(hash_prediction.collect())
-    global s_time
-    time_delta = timeDeltas()
     string = "{0}\t{1}\t{2[TP]}\t{2[FP]}\t{2[FN]}\t{2[TN]}\t" \
              "{2[Recall]:.3f}\t{2[Precision]:.3f}\t{2[Fmeasure]:.3f}\t{2[Accuracy]:.3f}\t" \
-             "{3[time_since_start]:.3f} {3[time_since_last]:.3f}".format(
-     hashtable_size, use_hash_signing, cd, time_delta)
+             "{2[time_since_start]:.3f} {2[time_since_last]:.3f}".format(
+     hashtable_size, use_hash_signing, cd)
     filePrint(string,filehandle)
     return cd
 
@@ -693,6 +696,8 @@ if __name__ == "__main__":
     keys = sorted([int(key) for key in test_dict])
     keys = [str(key) for key in keys]
     test_results_dict = {}
+    s_time = time()
+
     for hash_table_size in keys:
         test_prediction = predict(test_dict[str(hash_table_size)],nb_model_for_hash_sizes[hash_table_size])
         test_results_dict[hash_table_size] = test_prediction
