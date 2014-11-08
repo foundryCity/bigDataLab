@@ -620,6 +620,8 @@ if __name__ == "__main__":
         paths.append(path)
 
     hash_table_sizes = [100,300,1000,3000,10000]
+    hash_table_strings = map(lambda x: str(x),hash_table_sizes)
+
     array_of_dicts_of_rdds = arrayOfDictsOfRDDs(hash_table_sizes
                                 ,rdds)
     '''
@@ -665,12 +667,9 @@ if __name__ == "__main__":
         use_log = 0
         string = "hSize\tsigned?\tTP\tFP\tFN\tTN\tRecall\tPrcsion\tFMeasre\tAcc\tTime"
         filePrint(string,filehandle)
-        #this bits really ugly
-        keys = sorted([int(key) for key in training_dict])
-        keys = [str(key) for key in keys]
 
         results_for_fold_dict = {}
-        for hash_table_size in keys:
+        for hash_table_size in hash_table_strings:
             logTimeIntervalWithMsg('##### T R A I N I N G  #####')
             nbModel = trainBayes(training_dict[hash_table_size])
             nb_model_for_hash_sizes[hash_table_size] = nbModel
@@ -693,16 +692,14 @@ if __name__ == "__main__":
     filePrint ("\n\ntest results (test set is set {})\n".format(test_set),filehandle)
     string = "hSize\tsigned?\tTP\tFP\tFN\tTN\t" \
         "Recall\tPrcsion\tFMeasre\tAcc\tTime"
-    keys = sorted([int(key) for key in test_dict])
-    keys = [str(key) for key in keys]
     test_results_dict = {}
     s_time = time()
 
-    for hash_table_size in keys:
-        test_prediction = predict(test_dict[str(hash_table_size)],nb_model_for_hash_sizes[hash_table_size])
+    for hash_table_size in hash_table_strings:
+        test_prediction = predict(test_dict[hash_table_size],nb_model_for_hash_sizes[hash_table_size])
         test_results_dict[hash_table_size] = test_prediction
 
-        reportResultsForHashOnOneLine(test_results_dict[str(hash_table_size)],hash_table_size,use_hash_signing, filehandle)
+        reportResultsForHashOnOneLine(test_results_dict[hash_table_size],hash_table_size,use_hash_signing, filehandle)
 
 
 
