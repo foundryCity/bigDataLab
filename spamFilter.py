@@ -411,14 +411,16 @@ def reportResultsForLexiconOnOneLine(lexPrediction,filehandle):
     print(string)
 
 
-def reportResultsForHashOnOneLine(hash_prediction,hashtable_size,use_hash_signing, total_time=0, filehandle=None):
+
+
+def reportResultsForCollectedHashOnOneLine(hash_prediction,hashtable_size,use_hash_signing, total_time=0, filehandle=None):
     '''
-    :param hashPrediction:prediction generate from hashes
+    :param hashPrediction:array of COLLECTED prediction results
     :param filefilehandle: file to write results to
-    :return:None
+    :return:confusionDict
     '''
 
-    cd = confusionDict(hash_prediction.collect())
+    cd = confusionDict(hash_prediction)
     cd['time_since_last'] = float(total_time)
 
     string = "{0}\t{1}\t{2[TP]}\t{2[FP]}\t{2[FN]}\t{2[TN]}\t" \
@@ -427,6 +429,16 @@ def reportResultsForHashOnOneLine(hash_prediction,hashtable_size,use_hash_signin
         .format(hashtable_size, use_hash_signing, cd)
     filePrint(string,filehandle)
     return cd
+
+def reportResultsForHashOnOneLine(hash_prediction,hashtable_size,use_hash_signing, total_time=0, filehandle=None):
+    '''
+    :param hashPrediction:prediction generate from hashes
+    :param filefilehandle: file to write results to
+    :return:confusionDict
+    '''
+    hash_prediction = hash_prediction.collect()
+    return reportResultsForCollectedHashOnOneLine(hash_prediction,hashtable_size,use_hash_signing,total_time,filehandle)
+
 
 def filePrint(string,filehandle=None):
     if filehandle:
@@ -544,6 +556,7 @@ def dictOfArrayOfRDDs(keys,rdds):
         array = []
         for rdd in rdds:
             vector = vectoriseWithHashtable(rdd,hash_size)
+            vector.cache()
             array.append(vector)
         dictOfArrays[str(hash_size)]=array
     return dictOfArrays
@@ -635,8 +648,8 @@ if __name__ == "__main__":
     validateInput()
 
     sc = SparkContext(appName="spamFilter")
-    logTimeIntervalWithMsg("spark initialised, resetting timers")
-    s_time = time()
+    #logTimeIntervalWithMsg("spark initialised, resetting timers")
+    #s_time = time()
 
     filehandle = open('out.txt', 'a')
     spamPath = sys.argv[1]
@@ -654,45 +667,34 @@ if __name__ == "__main__":
     hash_table_sizes = [100,300,1000,3000,10000]
     hash_table_strings = map(lambda x: str(x),hash_table_sizes)
 
-    array_of_dicts_of_rdds = arrayOfDictsOfRDDs(hash_table_sizes
-                                ,rdds)
-
     dict_of_arrays_of_rdds = dictOfArrayOfRDDs(hash_table_sizes
                                 ,rdds)
 
-    # now we have an array of dictionaries of rdds. One array entry per email directory
-    # [  {'100':rddVector, '300':rddVector, 1000:rddVector}...}
-    # ,  {'100':rddVector, '300':rddVector, 1000:rddVector}...}
-    # ,  {'100':rddVector, '300':rddVector, 1000:rddVector}...}
-    # ...
-    # ]
-    # each rddVector has the form ((<1|0>,[vector]),(<1|0>,[vector]),(<1|0>,[vector]),...)
-    # then we access as arrayOfDicts[0]['100']...
     '''
-    which could just as well be a dict of arrays:
+     now we have  a dict of arrays:
     {
     '100':[vector1, vector2, ...]
     '300':[vector1, vector2, ...]
     ...
     }
+     access as dictOfArrays['100'][0] .. etc
+    '''
 
-    then we access as dictOfArrays['100'][0]
-    '''
-    '''
-    for (idx,rddDict) in enumerate(arrayOfHashDicts):
-    '''
     logTimeIntervalWithMsg('starting the folds...',filehandle)
     validation_results = {}
     summary_results = {}
     test_results = {}
     nb_model_for_hash_sizes = {}
     nbModel = ""
-    #test_dict = array_of_dicts_of_rdds.pop(test_set) # old
     test_dict = {}
     paths.pop(test_set)
+    print ("\nrunning time to lap0, including spark initialisation: {:.6f}\n".format(time()-start_s_time))
+    #print ("running time to lap0, after spark initialisation: {:.6f}".format(time_b))
+
     string = "hSize\tsigned?\tTP\tFP\tFN\tTN\tRecall\tPrcsion\tFMeasre\tAcc\tTime"
     filePrint(string,filehandle)
     for hash_table_size in hash_table_strings:
+
         #use_log = 1
         #logTimeIntervalWithMsg('\n\n#####  HASHTABLE:{0}\n\n'.format(hash_table_size),filehandle)
         #use_log = 0
@@ -715,18 +717,16 @@ if __name__ == "__main__":
 
             nbModel = trainBayes(training_rdd)
             nb_model_for_hash_sizes[hash_table_size] = nbModel
-            hash_prediction = predict(validation_rdd, nbModel)
+            validation_prediction_rdd = predict(validation_rdd, nbModel)
             ltime = time()-lap_time
-            reportResultsForHashOnOneLine(hash_prediction,hash_table_size,use_hash_signing,ltime, filehandle)
-
+            validation_prediction_array = validation_prediction_rdd.collect()
+            reportResultsForCollectedHashOnOneLine(validation_prediction_array,hash_table_size,use_hash_signing,ltime, filehandle)
+            #print ".",
             #accumulate the results (to display average per hash table size after all folds processed
 
-           # if hash_table_size in summary_results:
-           #     summary_results[hash_table_size] = summary_results[hash_table_size].union(hash_prediction)
-           # else:
-           #     summary_results[hash_table_size] = hash_prediction
+
             prediction_dict = {}
-            prediction_dict['prediction'] = hash_prediction
+            prediction_dict['prediction'] = validation_prediction_rdd
             prediction_dict['lap_time'] = ltime
             prediction_dict['model'] = nbModel
             if hash_table_size not in validation_results:
@@ -764,7 +764,7 @@ if __name__ == "__main__":
     #pprint(summary_results)
 
 
-    filePrint ("\n\ncross-validation averages\n",filehandle)
+    filePrint ("\n\ncross-validation totals - all folds\n",filehandle)
 
     string = "hSize\tsigned?\tTP\tFP\tFN\tTN\t" \
         "Recall\tPrcsion\tFMeasre\tAcc\tTime"
@@ -773,7 +773,8 @@ if __name__ == "__main__":
         result = summary_results[str(hash_table_size)]
         prediction = result['prediction']
         total_time = result['total_time']
-        reportResultsForHashOnOneLine(prediction,hash_table_size,use_hash_signing,total_time,filehandle)
+        prediction = prediction.collect()
+        reportResultsForCollectedHashOnOneLine(prediction,hash_table_size,use_hash_signing,total_time,filehandle)
 
 
 
@@ -781,43 +782,24 @@ if __name__ == "__main__":
 
     string = "hSize\tsigned?\tTP\tFP\tFN\tTN\t" \
         "Recall\tPrcsion\tFMeasre\tAcc\tTime"
-    test_results_dict = {}
+    filePrint(string,filehandle)
+
     s_time = time()
     sums_time = 0
     totals_time = 0
+    cumulative_lap_time = 0
     for hash_table_size in hash_table_strings:
         test_start_s_time = time()
-
         test_prediction = predict(test_dict[hash_table_size],nb_model_for_hash_sizes[hash_table_size])
-        test_results_dict[hash_table_size] = test_prediction
-
+        test_prediction = test_prediction.collect()
         test_end_s_time = time()
-
         laps_time = test_end_s_time - test_start_s_time
-
-        sums_time += laps_time
-
-        lasts_time = totals_time
-
-
-
-        totals_time = test_end_s_time - s_time
-
-        #print("totals_time ({:.6f}) = test_end_s_time({:.6f}) - s_time({:.6f})".format(totals_time,test_end_s_time,s_time))
-
-
-        times_diff = totals_time - lasts_time
-
-
-        print("totals_time {:.6f} laps_time {:.6f} sums_time {:.6f} times_diff {:.6f}"
-              .format(totals_time,laps_time,sums_time,times_diff))
-
-        reportResultsForHashOnOneLine(test_results_dict[hash_table_size],hash_table_size,use_hash_signing,laps_time,filehandle)
+        reportResultsForCollectedHashOnOneLine(test_prediction,hash_table_size,use_hash_signing,laps_time,filehandle)
 
 
     end_s_time = time()
     runtime_s = end_s_time - start_s_time
-    print("s_runtime:{}".format(runtime_s))
+    print("\ntotal running time:{}".format(runtime_s))
 
 
 
